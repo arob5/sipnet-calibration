@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<pecan>
+ <assim.batch>
+  <param.names>
+    <soil.HPDA>
+     <param>rdConst</param>
+     <param>som_respiration_rate</param>
+   </soil.HPDA>
+   <temperate.deciduous.HPDA>
+    <param>psnTOpt</param>
+    <param>leafGrowth</param>
+   </temperate.deciduous.HPDA>
+  </param.names>
+ </assim.batch>  
+ <info>
+  <notes></notes>
+  <userid>-1</userid>
+  <username>arober</username>
+  <date>2024/07/23</date>
+ </info>
+ <outdir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/</outdir>
+ <modeloutdir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/out</modeloutdir>
+ <rundir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/run</rundir>
+ <database>
+   <bety>
+    <write>false</write>
+   </bety>
+ </database>
+ <pfts>
+  <pft>
+   <name>temperate.deciduous.HPDA</name>
+   <constants>
+    <num>1</num>
+   </constants>
+   <outdir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/param/priors/temperate.deciduous.ALL</outdir>
+  </pft>
+  <pft>
+   <name>soil.HPDA</name>
+   <constants>
+    <num>1</num>
+   </constants>
+   <outdir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/param/priors/soil.ALL</outdir>
+  </pft>
+ </pfts>
+ <ensemble>
+  <size>70</size>
+  <samplingspace>
+   <parameters>
+    <method>lhc</method>
+   </parameters>
+   <met>
+    <method>sampling</method>
+   </met>
+  </samplingspace>
+ </ensemble>
+ <model>
+  <id>1000000022</id>
+  <type>SIPNET</type>
+  <revision>ssr</revision>
+  <delete.raw>FALSE</delete.raw>
+  <binary>/projectnb/dietzelab/dongchen/SIPNET/sipnet</binary>
+  <jobtemplate>~/pecan/models/template/inst/template_geo.job</jobtemplate>
+ </model>
+ <host>
+  <name>localhost</name>
+  <usr>arober</usr>
+  <prerun>module load R/4.1.2</prerun>
+  <cdosetup>module load cdo/2.0.6</cdosetup>
+  <qsub>qsub -V -N @NAME@ -o @STDOUT@ -e @STDERR@ -P dietzelab -l buyin -S /bin/bash</qsub>
+  <qsub.jobid>Your job ([0-9]+) .*</qsub.jobid>
+  <qstat>qstat -j @JOBID@ || echo DONE</qstat>
+  <tunnel>~/Tunnel/Tunnel</tunnel>
+  <folder>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/out</folder>
+  <outdir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/out</outdir>
+  <rundir>/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024/run</rundir>
+ </host>
+ <settings.info>
+  <deprecated.settings.fixed>TRUE</deprecated.settings.fixed>
+  <settings.updated>TRUE</settings.updated>
+  <checked>TRUE</checked>
+ </settings.info>
+<run>
+  <site>
+    <id>1000004955</id>
+    <met.start>2012/01/01</met.start>
+    <met.end>2021/12/31</met.end>
+    <lat>42.53</lat>
+    <lon>-72.19</lon>
+    <name>Harvard Forest (LTER-HFR)</name>
+  </site>
+  <start.date>2012/01/01</start.date>
+  <end.date>2021/12/31</end.date>
+  <inputs>
+    <met>
+      <path>/projectnb/dietzelab/dongchen/anchorSites//ERA5_2012_2021/1000004955/ERA5.1.2012-01-01.2021-12-31.clim</path>
+    </met>
+    <poolinitcond>
+     <source>RS_veg</source>
+     <output>poolinitcond</output>
+     <path>
+      <path>/projectnb/dietzelab/dongchen/anchorSites/IC/IC/1000004955/IC_site_1-4955_1.nc</path>
+     </path>
+    </poolinitcond>
+    <pft.site>
+     <path>/projectnb/dietzelab/dongchen/anchorSites/site_pft.csv</path>
+    </pft.site>
+   </inputs>
+</run>
+</pecan>

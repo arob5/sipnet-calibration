@@ -1,0 +1,453 @@
+---
+title: "SIPNET Calibration Setup Summary"
+author: "Andrew Roberts"
+date: "2024-10-29"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(eval=TRUE, echo=FALSE)
+
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+library(assertthat)
+library(PEcAn.settings)
+
+# Directories. 
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration", 
+                      "runs", "sipnet_calibration_2024")
+calibration_dir <- file.path(base_dir, "calibration")
+src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
+
+# Sourcing helper functions.
+source(file.path(src_dir, "general_helper_functions.r"))
+source(file.path(src_dir, "basis_function_emulation.r"))
+source(file.path(src_dir, "plotting_helper_functions.r"))
+
+# Paths to files.
+model_outputs_path <- file.path(calibration_dir, "model_forecasts_design.csv")
+plant_prior_path <- file.path(base_dir, "param", "priors", 
+                              "sipnet_params_default_priors_plant.csv")
+soil_prior_path <- file.path(base_dir, "param", "priors", 
+                             "sipnet_params_default_priors_soil.csv")
+param_path_plant_pft <- file.path(base_dir, "param", "param_design", 
+                                  "param_design_plant_pft.csv")
+param_path_soil_pft <- file.path(base_dir, "param", "param_design", 
+                                 "param_design_soil_pft.csv")
+pecan_settings_path <- file.path(base_dir, "sipnet_calibration.xml")
+obs_path <- file.path(calibration_dir, "obs_forecast_aligned.csv")
+```
+
+```{r, include=FALSE}
+# Read PEcAn settings.
+settings <- PEcAn.settings::read.settings(inputfile=pecan_settings_path)
+```
+
+This document summarizes the setup for the SIPNET calibration run, which 
+includes information on the calibration parameters, prior parameter 
+distributions, site, initial conditions, model drivers, time horizon and model 
+time step, observation data, and likelihood.
+
+# File paths 
+* Base model run directory (all other paths relative to this):   `/projectnb/dietzelab/arober/sipnet_calibration/runs/sipnet_calibration_2024`
+* PEcAn settings: `sipnet_calibration.xml`
+
+# Location and Time Information
+## Spatial 
+* Site name: Bartlett Experimental Forest (NEON-D01-BART)
+* Site ID: 1000004924
+* Site description: a temperate deciduous forest located outside of 
+Bartlett, NH in the white mountains.
+
+Note that there are multiple Bartlett Experimental Forest sites within Dongchen's
+SDA run (i.e., within the file `/projectnb/dietzelab/dongchen/anchorSites/site_pft.csv`).
+I am not sure if choosing one versus another is important for the kind of test 
+I am doing, so please let me know if there are important differences I should 
+be aware of.
+
+## Temporal
+* Time horizon: 01/01/2012 - 12/21/2021 (aligns with Dongchen's anchor site SDA runs).
+* Model time step: 3 hours
+
+# Parameters
+```{r}
+plant_prior <- fread(plant_prior_path)
+soil_prior <- fread(soil_prior_path)
+
+# Allocation parameters are handled separately as they are defined a 
+# Dirichlet prior. This stores the concentration parameter used in 
+# the Dirichlet prior. 
+alloc_params <- c("wood_allocation_fraction", "root_allocation_fraction",
+                  "leaf_allocation_fraction")
+alloc_params_alpha <- setNames(c(0.25, 0.25, 0.25), alloc_params)
+for(i in seq_along(alloc_params)) {
+  par <- alloc_params[i]
+  alpha_par <- alloc_params_alpha[i]
+  plant_prior[par_name==par, `:=`(distn="Dirichlet", parama=alpha_par, paramb=NA)]
+}
+```
+
+## Calibration Parameters
+The following parameters are targeted for calibration. The majority of the 
+parameters were selected to align with those used in Istem's paper 
+*Linking big models to big data: efficient ecosystem model calibration through Bayesian model emulation*.
+The parameters *Amax*, *wood_allocation_fraction*, *root_allocation_fraction*,
+and *leaf_allocation_fraction* were also added based on Cherry's investigations. 
+Note that *root_allocation_fraction* maps to the SIPNET parameter *fineRootAllocation* 
+(the database parameter name standards can differ from the SIPNET parameter name 
+standards). Priors were chosen to align with those used in Istem's paper. 
+For the parameters not included in Istem's paper, I set uniform priors with the 
+bounds set to the min/max bounds specified in SIPNET's `template.param` file. 
+Prior independence is assumed across all parameters, except for the allocation
+parameters, which are assigned a Dirichlet prior. The allocation parameters 
+for wood, fine roots, coarse roots, and leaves must sum to 1. Note that SIPNET 
+implicitly defines the coarse root parameter as the difference between 1.0 
+and the sum of the other allocation parameters. In the table below, `parama`
+lists the concentration parameter for the Dirichlet distribution for each 
+allocation parameter (equivalently, these are the means of the marginal 
+distribution for each parameter). I originally set the concentration 
+parameters using the default SIPNET value for each parameter, 
+as specified in `template.param`. However, the resulting runs still generally 
+led to plummetting aboveground biomass. I therefore adjusted the parameters to 
+favor the wood allocation fraction.
+SIPNET is run using two PFTs: one corresponding 
+to plants and one to soil. The calibration parameters and their priors are 
+grouped by these PFTs and summarized below. We also plot histograms summarizing 
+the 1d marginal distributions for the allocation parameters.
+
+## Plant PFT: temperate.deciduous.HPDA
+```{r}
+kable(plant_prior, caption="calibration parameters: plant")
+```
+
+## Soil PFT: soil.HPDA
+```{r}
+kable(soil_prior, caption="calibration parameters: soil")
+```
+
+## Allocation Parameters
+```{r}
+alloc_param_design <- fread(param_path_plant_pft)[,..alloc_params]
+
+for(par in alloc_params) {
+  dt <- alloc_param_design[, ..par]
+  setnames(dt, par, "x")
+  alloc_plt <- ggplot(dt) + geom_histogram(aes(x=x)) + 
+               labs(title=par, xlab=par)
+  plot(alloc_plt)
+}
+```
+
+
+## Fixed Parameters
+I define *fixed* parameters as all SIPNET parameters aside from the calibration
+parameters. The entire set of SIPNET parameters is provided in SIPNET's 
+`template.param` file (which includes the initial conditions). The current logic 
+of Istem's PDA code goes as follows: 
+
+1. The code tries to define prior distributions for *all* parameters (calibration
+and fixed) by first looking in the database and then for local files. Preference 
+is given to the most recent posterior distribution from a past run, which is then 
+used to define the prior for the current run. Otherwise, the code looks for a new
+prior. If neither is found, no error is thrown.
+2. For fixed parameters that have a prior distribution defined, their values are 
+fixed at their prior medians.
+3. For fixed parameters lacking prior distributions, the default SIPNET values 
+from `template.param` are used.
+
+For simplicity, in this initial test I only define priors for the calibration 
+parameters, meaning that all fixed parameters are set to their default 
+SIPNET values.
+
+## Other Notes
+Within the XML settings file, under both the plant and soil PFT blocks, the 
+following block is included
+```
+   <constants>
+    <num>1</num>
+   </constants>
+```
+which appears to have some sort of effect in `write.configs.SIPNET.R`. I am 
+unsure if this is significant but wanted to note it here just in case.
+
+# Initial Conditions and Model Drivers
+Initial conditions (ICs) and model drivers (met data) is considered fixed for 
+this simple test. I choose a single IC ensemble member from Dongchen's IC 
+ensemble for the anchor site runs, and likewise with his model driver ensemble.
+These selected ensemble members are then fixed throughout the entire analysis 
+here.
+
+## Initial Conditions
+The IC used here comes from the file   `/projectnb/dietzelab/dongchen/anchorSites/IC/IC/1000004924/IC_site_1-4924_100.nc`, 
+which contains a single ensemble member within the IC ensemble used for 
+the SDA anchor site runs. The exception is the initial soil pool, which I 
+manually override to approximately align with the value given in the constraint
+data discussed below. The soil IC in the IC file whose path is given above is 
+5600g. I manually update this to 20000g to approximately align with the 
+constraint data. The soil constraint data will not be used elsewhere in the 
+calibration to avoid double-dipping.
+
+| Pool              | IC         | Unit  |
+| :---------------- | :--------- | :---- |
+| plantWoodInit     | 156520.871 | g C $m^{-2}$ |
+| laiInit           | 0.0029     | $m^2 m^{-2}$  |
+| litterInit        | 280        | g C $m^{-2}$ |
+| soilInit          | 20000      | g C $m^{-2}$ |
+| litterWFracInit   | 0.5        | unitless fraction |
+| soilWFracInit     | 56.183     | unitless fraction |
+| snowInit          | 1          | cm water equiv |
+| microbeInit       | 0.5        | mg C / g soil microbe |
+
+### A Note on Manually Overriding an IC
+The SIPNET write config file allows manually passing in a list of initial 
+conditions via the `IC` argument. I initially tried this, but there are a few 
+limitations: (1) this does not allow only overriding a single pool; if going 
+this route, all pool ICs must be passed via this argument; (2) even if passing 
+the entire IC list (as read from the initial condition `.nc` file), the resulting
+non-soil initial pools will differ from what you would get from the default 
+function behavior, whereby the `.nc` file is located via the settings object.
+This is due to the fact that some preprocessing is done in the write config 
+file; namely, the specific leaf area (SLA) is calculated, which is later 
+passed as 
+`IC.pools <- PEcAn.data.land::prepare_pools(IC.path, constants = list(sla = SLA))`
+when setting the initial pools. For this reason, the approach I took in modifying 
+the soil carbon pool is to first write the configs using the default behavior, 
+then post-hoc read and overwrite the files to manually change the 
+`soilInit` value of the `sipnet.param` file for each run (note that this 
+value is stored in grams in this file, but in kg in the `.nc` file). I think 
+that making the write config file more modular would help in making this 
+adjustment easier to perform. 
+
+
+## Model Driver
+The driving meteorological data comes from the file  
+`/projectnb/dietzelab/dongchen/anchorSites//ERA5_2012_2021/1000004924/ERA5.5.2012-01-01.2021-12-31.clim`, which contains a single ensemble member within the model driver ensemble 
+used for the SDA anchor site runs. The below figure plots the driver data.
+Question: why is `soilWetness` constant?
+
+```{r, include=FALSE}
+# Read clim data. NOTE: vpd = vapor pressure deficit (measure of moisture)
+clim_colnames <- c("loc", "year", "day", "time", "length", "tair", "tsoil", 
+                   "par", "precip", "vpd", "vpdSoil", "vPress", "wspd", 
+                   "soilWetness")
+driver_data <- fread(settings$run$inputs$met$path, sep="\t")
+colnames(driver_data) <- clim_colnames
+
+# Add date column. Note that subtracting 1 from year since the day in the .clim
+# file is indexed from one, not zero. 
+# See here: https://stackoverflow.com/questions/24200014/convert-day-of-year-to-date
+driver_data[, date := as.Date(day, origin=paste0(year-1, "-12-31"))]
+
+# Add datetime column. NOTE: seems to be rounding the time to nearest hour, 
+# but this is fine for the purposes of this plot.
+driver_data[, datetime := as.POSIXct(paste(date, time), format="%Y-%m-%d %H")]
+```
+
+```{r}
+# Plot time series of met data.
+cols_plot <- c("par", "precip", "vpdSoil", "soilWetness")
+
+for(col in cols_plot) {
+  y <- sym(col)
+  plt <- ggplot(driver_data) + 
+         geom_line(aes(x=datetime, y=!!y)) +
+         labs(x="time", y=col, title="Driver Data")
+  plot(plt)
+}
+```
+
+# Forward Model Design Runs
+
+```{r, include=FALSE}
+n_design <- as.integer(settings$ensemble$size)
+
+# Parameter/input design.
+param_design_plant <- fread(param_path_plant_pft)
+param_design_soil <- fread(param_path_soil_pft)
+
+# Design outputs (trajectories).
+model_output <- fread(model_outputs_path)
+id_cols <- c("posix", "time", "year", "run_id")
+output_vars <- setdiff(colnames(model_output), id_cols)
+```
+
+I generate an initial ensemble of `r n_design` parameter vectors by drawing 
+a Latin Hypercube sample from the prior for the subset of parameters 
+excluding the allocation parameters. I then draw iid samples from the 
+Dirichlet prior on the allocation parameters and attach these to the 
+Latin Hypercube samples to complete the parameter design matrix.
+The below plots summarize a 20 
+member sub-sample of this ensemble, with each line corresponding to the 
+model trajectory using a different parameter design point. 
+
+```{r}
+# Plot trajectories of model outputs (sub-sample the ensemble).
+run_ids <- unique(model_output$run_id)
+run_id_sample <- sample(run_ids, size=20)
+
+# Plot model outputs over entire time horizon. 
+for(output in output_vars) {
+  output <- sym(output)
+  plt <- ggplot(data=model_output[run_id %in% run_id_sample]) + 
+          geom_line(aes(x=posix, y=!!output, color=run_id)) + 
+          xlab("time") + theme(legend.position="none")
+  plot(plt)
+}
+```
+
+
+## All Design Runs
+
+For a subset of the variables, we investigate the full set of design runs.
+Of note is the fact that fine and coarse root carbon exhibit little variation 
+in their trajectories and experience large drops over the time horizon.
+It appears that fine root carbon decreases exponentially towards zero, or a 
+near-zero value.
+
+```{r}
+# Plot full ensemble for outputs I want to investigate more closely.
+output_vars_plt <- c("TotSoilCarb", "AbvGrndWood", "fine_root_carbon_content",
+                     "coarse_root_carbon_content", "AGB")
+
+# Plot model outputs over entire time horizon. 
+for(output in output_vars_plt) {
+  output <- sym(output)
+  plt <- ggplot(data=model_output) + 
+          geom_line(aes(x=posix, y=!!output, group=run_id), color="grey") + 
+          xlab("time") + theme(legend.position="none")
+  plot(plt)
+}
+```
+
+
+## PCA Basis
+
+I also briefly see how capable a low-dimensional PCA basis is at representing 
+the variation in the model outputs. The below plots apply PCA to daily 
+averages of various outputs. PCA seems to do a good job here, representing the 
+outputs well with only one or two basis vectors. I think this is another 
+promising direction for parameter calibration under forward model emulation. 
+PCA is a convenient for initial testing, but we should be able to design 
+better bases by baking in prior knowledge on the known temporal cycles that 
+these model outputs tend to have. By considering daily averages below, I am 
+also not attempting to represent the diurnal cycle, which will become important 
+when we want to calibrate to flux data.
+
+```{r, include=FALSE}
+# PCA helper functions. 
+
+run_pca_sipnet_output <- function(output_name, r=3L) {
+  # Compute daily averages.
+  cols <- c("run_id", "posix", output_name)
+  dt_pca <- model_output[, ..cols]
+  dt_pca[, date := lubridate::date(posix)]
+  dt_pca[, posix := NULL]
+  setnames(dt_pca, output_name, "output_var")
+  dt_pca <- dt_pca[, .(output=mean(output_var)), by=.(run_id, date)]
+  
+  # Create matrix of model outputs for PCA.
+  G <- data.table::dcast(dt_pca, "run_id ~ date", value.var="output")
+  G[, run_id := NULL]
+  G <- as.matrix(G)
+  
+  # Eigendecomposition.
+  pca_list <- pca(G, r=r)
+  sdev <- pca_list$sqrt_val
+  V <- pca_list$vec
+  
+  return(list(G=G, V=V, sdev=sdev))
+}
+
+plot_pca_summary <- function(G, V, sdev, r=3L, output_name) {
+  # Eigenvalue (scree) plot.
+  scree_plt <- ggplot(data.frame(k=seq_along(sdev), eigenval=sdev)) + 
+               geom_point(aes(x=k, y=eigenval)) + ylab("Sqrt eigenvalues") + 
+               ggtitle(paste0("PCA: ", output_name, ", daily averages"))
+  plot(scree_plt)
+
+  # Dominant eigenvectors.
+  plt_eig <- plot_curves_1d_helper(seq_len(ncol(G)), V[,1:r, drop=FALSE], 
+                                   plot_title="Dominant eigenvectors",
+                                   xlab="days", ylab=output_name)
+  plot(plt_eig)
+}
+
+```
+
+```{r}
+# Run PCA on daily averages.
+r <- 3L
+
+output_names <- c("AbvGrndWood", "TotSoilCarb", "NEE", "LAI")
+for(output_var in output_names) {
+  pca_list <- run_pca_sipnet_output(output_var, r=r)
+  plot_pca_summary(pca_list$G, pca_list$V, pca_list$sdev, r=r, output_var)
+}
+
+```
+
+# Observation Data 
+For the time being I am obtaining observations from   `/projectnb/dietzelab/dongchen/anchorSites/Obs/Rdata/obs.mean.Rdata`. This file,
+used in the SDA anchor site runs, contains observations of some state variables 
+at an annual frequency. Below I consider observations of aboveground wood, 
+total soil carbon, and LAI. I compare these observations to the model outputs 
+from the design runs, aggregated to annual means to align with the data. The 
+boxplots summarize the distributions of these annual means across the 
+ensemble. Some notes:
+* The aboveground wood annual observations are constant across years, and cut 
+off after 2017.
+* The LAI observations tend to be much larger than the model predictions, aside
+from three years that fall within the bounds of the ensemble distribution.
+* The soil carbon observations are also constant across years.
+
+Questions:
+1. What is the original source of the `obs.mean` data; where does it come from 
+and how is it generated? 
+2. Why does the aboveground wood data cut off after 2017? 
+3. I'm assuming the aboveground wood and soil carbon data are constant due 
+to the fact that these are coming from data products that are not updated 
+often. If that is the case, it seems I should be calibrating to a time average 
+over the entire model output trajectory, rather than annual averages.
+4. Why is there such large year-to-year variability in the LAI data?
+5. The observations in `obs.mean` are all time-stamped to July 15th. Is there 
+a reason for this convention? I'm assuming the observations correspond to the 
+calendar years?
+
+```{r}
+# Read annual observations and model outputs.
+obs_dt <- fread(obs_path)
+obs_dt[, year := as.factor(year)]
+```
+
+```{r}
+
+obs_vars <- c("AbvGrndWood", "LAI", "TotSoilCarb")
+
+# Plots histograms of model outputs of single output var separated by year, 
+# with observations overlaid as points.
+boxplot_summary <- function(output_var) {
+  output_var <- sym(output_var)
+  annual_boxplots <- ggplot(obs_dt[type=="model"]) + 
+                     geom_boxplot(aes(x=year, y=!!output_var)) + 
+                     geom_point(aes(x=year, y=!!output_var), obs_dt[type=="obs"], 
+                                color="red") + 
+                     labs(y=output_var, title="Model Forecast Dists vs. Obs (Annual avg)")
+  
+  plot(annual_boxplots)
+}
+
+for(output_var in obs_vars) boxplot_summary(output_var)
+```
+
+
+
+
+
+
+

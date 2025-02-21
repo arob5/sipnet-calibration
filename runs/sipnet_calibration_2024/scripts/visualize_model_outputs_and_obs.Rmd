@@ -1,0 +1,133 @@
+---
+title: "Visualize Model Outputs and Observations"
+author: "Andrew Roberts"
+date: "2024-08-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# This Rmarkdown document reads the files saved by `prepare_obs_constraints.r`
+# in order to visualize the model projections and the observational constraints. 
+
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+
+# Directories.  
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration", 
+                      "runs", "sipnet_calibration_2024")
+calibration_dir <- file.path(base_dir, "calibration")
+
+# Filepaths. 
+model_outputs_path <- file.path(calibration_dir, "model_forecasts_design.csv")
+obs_outputs_aligned_path <- file.path(calibration_dir, "obs_forecast_aligned.csv")
+```
+
+```{r}
+# Read model forecasts and observations files. 
+model_outputs <- fread(model_outputs_path)
+obs_outputs_aligned <- fread(obs_outputs_aligned_path)
+
+# Also store model output in long format, with respect to the output variables.
+output_vars <- setdiff(colnames(model_outputs), c("posix", "time", "year", "run_id"))
+model_outputs_long <- data.table::melt(model_outputs, value.name="value", 
+                                       variable.name="output_var", 
+                                       measure.vars=output_vars)
+
+# Also store observed/forecast aligend data in long format, with respect to 
+# the output variables and the label designating observation or model output. 
+obs_outputs_aligned_long <- data.table::melt(obs_outputs_aligned, value.name="value", 
+                                             variable.name="output_var_temp", 
+                                             id.vars=c("posix", "run_id"), variable.factor=FALSE)
+obs_outputs_aligned_long[, c("output_var", "data_type") := tstrsplit(output_var_temp, split="[.]")]
+obs_outputs_aligned_long[, output_var_temp := NULL]
+
+# Store unique time stamps. 
+time_steps <- unique(model_outputs$posix)
+time_steps <- time_steps[order(time_steps)]
+N_time_steps <- length(time_steps)
+
+# Store unique run IDs (one run per design point). 
+run_ids <- unique(model_outputs$run_id)
+```
+
+```{r}
+# Plot trajectories of model outputs. 
+
+# run_id_sample <- sample(run_ids, size=10)
+run_id_sample <- run_ids[1:10]
+
+# Plot model outputs over entire time horizon. 
+for(output in output_vars) {
+  output <- sym(output)
+  plt <- ggplot(data=model_outputs[run_id %in% run_id_sample]) + 
+          geom_line(aes(x=posix, y=!!output, color=run_id)) + 
+          xlab("time")
+  plot(plt)
+}
+```
+
+```{r}
+# Plot trajectories of model outputs. 
+
+plt <- ggplot(data=model_outputs[run_id %in% run_id_sample]) + 
+          geom_line(aes(x=posix, y=fine_root_carbon_content, color=run_id)) + 
+          xlab("time") + scale_y_continuous(limits = c(0, .1))
+plot(plt)
+
+```
+
+
+
+```{r}
+# Compute quantiles of model outputs.  
+
+quantiles <- seq(.1, 1, .1)
+model_outputs_long_quantile <- data.table(posix=POSIXct(), output_var=factor(), 
+                                          quantile=factor(), quantile_value=numeric())
+for(q in quantiles) { 
+  print(q)
+  quantile_func <- function(x) quantile(x, q)
+  outputs_q <- model_outputs_long[, .(quantile_value=quantile_func(value)), by=.(posix, output_var)]
+  outputs_q[, quantile := as.factor(100*q)]
+  model_outputs_long_quantile <- rbindlist(list(model_outputs_long_quantile, outputs_q), use.names=TRUE)
+}
+
+```
+
+```{r}
+# Plot quantiles of model outputs (over the parameter ensemble).
+for(output in output_vars) {
+  plt <- ggplot(data=model_outputs_long_quantile[output_var==output]) + 
+         geom_line(aes(x=posix, y=quantile_value, color=quantile)) + 
+         xlab("time") + ylab(output)
+  plot(plt)
+}
+```
+
+
+
+```{r}
+# Plot observed data vs. model outputs (which have been temporally aligned to the observed data).  
+for(output in unique(obs_outputs_aligned_long$output_var)) {
+  
+  # Model outputs. 
+  dt_model <- obs_outputs_aligned_long[(run_id %in% run_id_sample) & (output_var==output) & (data_type=="m")]
+  
+  # Observations. These should be the same across all run_ids, but I need to 
+  # add a check in to verify this. 
+  dt_obs <- obs_outputs_aligned_long[(run_id==run_id_sample[1]) & (output_var==output) & (data_type=="o")]
+  
+  plt <- ggplot() + 
+         geom_point(aes(x=posix, y=value, color=run_id), data=dt_model) + 
+         geom_point(aes(x=posix, y=value), data=dt_obs, color="black") + 
+         xlab("time") + ylab(output)
+  plot(plt)
+}
+```
+
+
+
+
+

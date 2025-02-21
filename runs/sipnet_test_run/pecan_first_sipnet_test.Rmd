@@ -1,0 +1,91 @@
+---
+title: "SIPNET Test Run: Visualizing Model Outputs"
+author: "Andrew Roberts"
+date: '2024-07-08'
+output: html_document
+---
+
+```{r, echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(PEcAn.settings)
+library(PEcAn.workflow)
+library(PEcAn.logger)
+library(PEcAn.utils)
+library(PEcAn.remote)
+library(PEcAn.uncertainty)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(assertthat)
+library(lubridate)
+
+# Filepaths. 
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration", 
+                      "runs", "sipnet_test_run")
+pecan_settings_path <- file.path(base_dir, "pecan_first_sipnet_test.xml")
+
+# Output variables to include in visualizations. 
+output_vars <- c("NEE", "LAI", "GPP", "TotSoilCarb", "leaf_carbon_content",
+                 "fine_root_carbon_content", "AGB")
+```
+
+```{r}
+# Read pecan settings. 
+settings <- PEcAn.settings::read.settings(inputfile=pecan_settings_path)
+```
+
+```{r}
+# Read outputs and convert to data.table. 
+
+# Used to specify path to read model outputs from. 
+run_ids <- readLines(file.path(settings$rundir, "runs.txt"))
+
+# List of matrices storing model output, one element per ensemble run (i.e., per run ID). 
+output_list <- list()
+
+for(run_id in run_ids) {
+  run_id_path <- file.path(settings$modeloutdir, run_id)
+  model_output <- PEcAn.utils::read.output(run_id, outdir=run_id_path, 
+                                           variables=output_vars, dataframe=TRUE)
+  model_output <- as.data.table(model_output)
+  model_output[, run_id := run_id]
+  output_list[[run_id]] <- model_output
+}
+
+# Combine into single data.table. 
+model_output <- rbindlist(output_list, use.names=TRUE)
+
+# Also store output in long format, with respect to the output variables. 
+model_output_long <- data.table::melt(model_output, value.name="value", 
+                                      variable.name="output_var", 
+                                      measure.vars=output_vars)
+```
+
+```{r}
+# Store unique time stamps. 
+time_steps <- unique(model_output$posix)
+time_steps <- time_steps[order(time_steps)]
+N_time_steps <- length(time_steps)
+```
+
+```{r}
+for(output in output_vars) {
+  output <- sym(output)
+  plt <- ggplot(data=model_output) + 
+          geom_line(aes(x=posix, y=!!output, color=run_id)) + 
+          xlab("time")
+  plot(plt)
+}
+
+```
+
+
+
+
+
+
+
+
+
+

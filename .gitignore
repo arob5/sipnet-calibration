@@ -1,0 +1,12 @@
+run/
+out/
+*.o
+*.html
+*.log
+*.err
+*.pdf
+*.Rdata
+*.clim
+*.nc
+*.csv
+
