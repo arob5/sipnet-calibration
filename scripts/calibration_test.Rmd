@@ -1,0 +1,81 @@
+---
+title: "calibration_test"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(eval=TRUE, echo=FALSE)
+
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+library(assertthat)
+library(PEcAn.settings)
+
+# Directories. 
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration")
+pecan_base_dir <- file.path(base_dir, "runs", "sipnet_calibration_2024")
+calibration_dir <- file.path(pecan_base_dir, "calibration")
+src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
+pecan_src_dir <- file.path(base_dir, "src")
+
+# Sourcing helper functions.
+source(file.path(src_dir, "general_helper_functions.r"))
+source(file.path(src_dir, "basis_function_emulation.r"))
+source(file.path(src_dir, "plotting_helper_functions.r"))
+source(file.path(pecan_src_dir, "param_calibration_functions.r"))
+
+# Paths to files.
+obs_mean_path <- file.path("/projectnb", "dietzelab", "dongchen", "anchorSites",
+                           "Obs", "Rdata", "obs.mean.Rdata")
+obs_cov_path <- file.path("/projectnb", "dietzelab", "dongchen", "anchorSites", 
+                          "Obs", "Rdata", "obs.cov.Rdata")
+
+model_outputs_path <- file.path(calibration_dir, "model_forecasts_design.csv")
+plant_prior_path <- file.path(pecan_base_dir, "param", "priors", 
+                              "sipnet_params_default_priors_plant.csv")
+soil_prior_path <- file.path(pecan_base_dir, "param", "priors", 
+                             "sipnet_params_default_priors_soil.csv")
+param_path_plant_pft <- file.path(pecan_base_dir, "param", "param_design", 
+                                  "param_design_plant_pft.csv")
+param_path_soil_pft <- file.path(pecan_base_dir, "param", "param_design", 
+                                 "param_design_soil_pft.csv")
+pecan_settings_path <- file.path(pecan_base_dir, "sipnet_calibration.xml")
+obs_path <- file.path(calibration_dir, "obs_forecast_aligned.csv")
+```
+
+```{r}
+# Read PEcAn settings object.
+settings <- PEcAn.settings::read.settings(inputfile=pecan_settings_path)
+
+# Specify single site.
+site_id <- settings$run$site$id
+```
+
+
+# Assemble data vector and likelihood.
+```{r}
+load(obs_mean_path)
+load(obs_cov_path)
+
+constraint_vars <- c("LAI", "AbvGrndWood")
+
+# Data vector, determines observation order convention.
+y_obs <- create_y_vec_annual(obs.mean, site_id=site_id, 
+                             output_vars=constraint_vars, 
+                             order_first_by_year=TRUE)
+obs_order <- names(y_obs)
+
+# Observation covariance matrix.
+Sig <- create_y_noise_cov_annual(obs.cov, obs_mean_list=obs.mean, 
+                                 site_id=site_id, obs_order=obs_order)
+```
+
+
+
+
+
+

@@ -144,8 +144,8 @@ create_y_dt_annual <- function(obs_mean_list, site_id, output_vars=NULL) {
 }
 
 
-get_y_noise_cov_annual <- function(obs_cov_list, obs_mean_list, site_id, 
-                                   obs_order) {
+create_y_noise_cov_annual <- function(obs_cov_list, obs_mean_list, site_id, 
+                                      obs_order) {
   # This function constructs an observation covariance matrix for a single 
   # site based on the values found in the "obs.cov" list in the format required
   # by the SDA code (see details below). The observations must be at an annual
@@ -214,6 +214,15 @@ get_y_noise_cov_annual <- function(obs_cov_list, obs_mean_list, site_id,
     cov_mat[idcs, idcs] <- cov_yr[vars_include, vars_include]
   }
 
+  # Currently there will never be covaraince across time. These show up as 
+  # NAs - convert to zeros.
+  cov_mat[is.na(cov_mat)] <- 0.0
+  
+  # Print warning for non-positive diagonal entries.
+  if(any(diag(cov_mat) <= 0)) {
+    message("Some diagonal entries are negative or zero.")
+  }
+  
   return(cov_mat)
 }
 
