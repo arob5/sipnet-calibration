@@ -87,10 +87,36 @@ settings$assim.batch$chain <- 1
 model_write_config <- paste("write.config.", settings$model$type, sep = "")
 PEcAn.utils::load.modelpkg(settings$model$type)
 
-# Save write configs. 
-run_ids <- PEcAn.assim.batch::pda.init.run(settings, con=NULL, model_write_config, 
-                                           workflow.id=-1, params=param_design_list_by_pft, 
-                                           n=N_design)
+# Save write configs: replacing call to pda.init.run here to be more explicit
+# about what is going on.
+
+run_ids <- paste("run", 1:N_design, sep=".")
+for(i in seq_along(run_ids)) {
+  # Create sub-directories for each run.
+  dir.create(file.path(settings$rundir, run_ids[i]), recursive=TRUE)
+  dir.create(file.path(settings$modeloutdir, run_ids[i]), recursive=TRUE)
+  
+  # Extract parameter value for current run.
+  param_curr <- lapply(param_design_list_by_pft, 
+                       function(pft_params) as.data.frame(pft_params[i,,drop=FALSE]))
+  
+  # Write config to file.
+  do.call(model_write_config, args=list(defaults = settings$pfts,
+                                        trait.values = param_curr,
+                                        settings = settings,
+                                        run.id = run_ids[i]))
+  
+  # Write the run ID to a new line in the runs text file.
+  cat(as.character(run_ids[i]),
+      file = file.path(settings$rundir, "runs.txt"),
+      sep = "\n",
+      append = (i != 1L))
+}
+
+# run_ids <- PEcAn.assim.batch::pda.init.run(settings, con=NULL, model_write_config, 
+#                                            workflow.id=-1, params=param_design_list_by_pft, 
+#                                            n=N_design)
+
 
 # ------------------------------------------------------------------------------
 # Set initial conditions. 
