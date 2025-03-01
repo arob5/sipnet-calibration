@@ -6,38 +6,35 @@
 # Andrew Roberts
 #
 
-mcmc_mh <- function(settings, llik, lprior, n_itr, par_init, 
-                    prop_settings=NULL, use_pecan=TRUE) {
+mcmc_mh <- function(settings, llik, lprior, par_names, n_itr, par_init, 
+                    prop_settings=NULL) {
   # Metropolis-Hastings with Gaussian proposal distribution. The proposal 
   # covariance is adapted by default.
 
   # Dimension of parameter space. 
   par_init <- drop(par_init)
   d <- length(par_init)
+  if(is.null(names(par_init))) names(par_init) <- par_names
 
   # Objects to store samples and other iteration-dependent information
   # (llik/lprior evaluations and proposal standard deviations).
   par_samp <- matrix(nrow=n_itr, ncol=d)
   chain_info <- matrix(nrow=n_itr, ncol=d+2L)
-  colnames(par_samp) <- llik_em$input_names
-  colnames(chain_info) <- c("llik", "lprior", llik_em$input_names)
+  colnames(par_samp) <- par_names
+  colnames(chain_info) <- c("llik", "lprior", par_names)
   
   # Proposal covariance.
-  cov_prop <- prop_settings$cov
-  log_scale_prop <- log(prop_settings$scale)
-  if(is.null(cov_prop)) cov_prop <- diag(rep(1,d))
-  if(is.null(log_scale_prop)) log_scale_prop <- log(2.38) - 0.5*log(d)
+  prop_settings <- get_init_mh_prop_settings(prop_settings, d)
+  cov_prop <- prop_settings$cov_prop
+  log_scale_prop <- prop_settings$log_scale_prop
   L_cov_prop <- t(chol(cov_prop))
-  accept_count <- 0L
-  times_adapted <- 0L
-  
+
   # Iteration 1 is taken to be the initial condition.
   lprior_curr <- lprior(par_init)
   if(is.infinite(lprior_curr)) {
     llik_curr <- -Inf
   } else {
-    llik_curr <- eval_pecan_llik(par_init, llik, run_id="itr_1", 
-                                 use_pecan=use_pecan, settings=settings)
+    llik_curr <- llik(par_prop, run_id="itr_1")
   }
   
   par_samp[1L,] <- par_init 
@@ -63,8 +60,7 @@ mcmc_mh <- function(settings, llik, lprior, n_itr, par_init,
           par_samp[itr,] <- par_samp[itr-1,]
         } else {
           # Compute log-posterior approximation. 
-          llik_prop <- eval_pecan_llik(par_prop, llik, run_id=paste0("itr_", itr), 
-                                       use_pecan=use_pecan, settings=settings)
+          llik_prop <- llik(par_prop, run_id=paste0("itr_", itr))
           lpost_prop <- lprior_prop + llik_prop
           
           # Accept-Reject step.
@@ -76,7 +72,7 @@ mcmc_mh <- function(settings, llik, lprior, n_itr, par_init,
             lprior_curr <- lprior_prop
             llik_curr <- llik_prop
             lpost_curr <- lpost_prop
-            accept_count <- accept_count + 1L 
+            prop_settings <- increment_accept_count(prop_settings)
           } else {
             par_samp[itr,] <- par_curr
           }
@@ -84,14 +80,15 @@ mcmc_mh <- function(settings, llik, lprior, n_itr, par_init,
         
         # Adapt proposal covariance matrix and scaling term.
         if(adapt && (((itr-1) %% adapt_interval) == 0)) {
-          times_adapted <- times_adapted + 1L
-          adapt_list <- adapt_MH_prop_cov(cov_prop, log_scale_prop, 
-                                          times_adapted, prop_settings,
-                                          samp_history=par_samp[(itr-adapt_interval+1):itr,,drop=FALSE])
-          cov_prop <- adapt_list$cov
-          log_scale_prop <- adapt_list$log_scale
-          if(prop_settings$adapt_cov_prop) L_cov_prop <- adapt_list$L_cov
-          accept_count <- 0L
+          prop_settings <- increment_times_adapted(prop_settings)
+          prop_settings <- prepare_adapt_settings(prop_settings, cov_prop,
+                                                  log_scale_prop, par_samp,
+                                                  adapt_interval, itr)
+          prop_settings <- do.call(adapt_mh_prop_cov, prop_settings)
+          cov_prop <- prop_settings$cov_prop
+          log_scale_prop <- prop_settings$log_scale_prop
+          if(prop_settings$adapt_cov_prop) L_cov_prop <- prop_settings$L_cov_prop
+          prop_settings$accept_count <- 0L
         }
         
         # Store chain info for current step.
@@ -111,9 +108,162 @@ mcmc_mh <- function(settings, llik, lprior, n_itr, par_init,
                         prop_sd=chain_info[,3:ncol(chain_info),drop=FALSE]),
               log_scale_prop=log_scale_prop, L_cov_prop=L_cov_prop, 
               par_curr=par_curr, par_prop=par_prop,
-              itr_curr=itr, par_init=par_init, condition=err))
+              itr_curr=itr, par_init=par_init, prop_settings=prop_settings,
+              condition=err))
 }
 
+
+# ------------------------------------------------------------------------------
+# MCMC helper functions.
+# ------------------------------------------------------------------------------
+
+adapt_mh_prop_cov <- function(cov_prop, log_scale_prop, adapt_cov, adapt_scale, 
+                              times_adapted, samp_history, accept_rate, 
+                              accept_rate_target=0.24, adapt_factor_exponent=0.8, 
+                              adapt_factor_numerator=10) {
+  # Follows the adaptive Metropolis scheme used in the Nimble probabilistic 
+  # programming language. 
+  # Described here: https://arob5.github.io/blog/2024/06/10/adapt-mh/
+  # Assumes a proposal covariance of the form exp(2l)*C where l is 
+  # `log_scale_prop` and C is `cov_prop`. Both l and C can be adapted.
+  # Let `d` denote the dimension of C.
+  #
+  # Args:
+  # cov_prop: the current value of C.
+  # log_scale_prop: the current value of l.
+  # adapt_cov: logical, whether or not to adapt C.
+  # adapt_scale: logical, whether or not to adapt l.
+  # time_adapted: the number of times the covariance has been adapted up to this
+  #               point (not the number of MCMC iterations).
+  # accept_rate_target: numeric, number between 0 and 1.
+  # adapt_factor_exponent: "tau" in the above linked writeup.
+  # adapt_factor_numeror: "eta" in the above linked writeup.
+  
+  return_list <- list()
+  adapt_factor <- 1 / (times_adapted + 3)^adapt_factor_exponent
+  
+  if(adapt_cov) {
+    if(accept_rate > 0) {
+      sample_cov_history <- cov(samp_history)
+      cov_prop <- cov_prop + adapt_factor * (sample_cov_history - cov_prop)
+    } 
+    
+    # Handle case that `cov_prop` may not be positive definite. 
+    L_cov_prop <- try(t(chol(cov_prop)))
+    if(inherits(L_cov_prop, "try-error")) {
+      message("Problematic proposal cov: ", cov_prop)
+      cov_prop <- Matrix::nearPD(cov_prop, ensureSymmetry=TRUE)
+      L_cov_prop <- t(chol(cov_prop))
+    }
+    
+    return_list$L_cov_prop <- L_cov_prop
+  }
+  
+  if(adapt_scale) {
+    log_scale_factor <- adapt_factor_numerator * adapt_factor * (accept_rate - accept_rate_target)
+    log_scale_prop <- log_scale_prop + log_scale_factor
+  }
+  
+  return_list$cov_prop <- cov_prop
+  return_list$log_scale_prop <- log_scale_prop
+  
+  return(return_list)
+}
+
+get_init_mh_prop_settings <- function(prop_settings, d) {
+  # Initialize the list used to control proposal covariance adaptation in 
+  # a Metropolis-Hastings algorithm with Gaussian proposal. Any proposal 
+  # adaptation settings not found in `prop_settings` will be provided 
+  # defaults. If `cov_prop` is not found in `prop_settings`, then a default
+  # initialization value for the proposal covariance is set. Same for the 
+  # scaling term `log_scale_prop`. `d` is the dimension of the parameter 
+  # space (i.e., the dimension of the proposal covariance).
+  
+  if(is.null(prop_settings)) prop_settings <- list()
+  
+  # Initialize counters to zero.
+  prop_settings[c("times_adapted", "accept_count")] <- c(0L, 0L)
+  
+  # Default initial values for the proposal covariance and scaling.
+  if(is.null(prop_settings$cov_prop)) {
+    prop_settings$cov_prop <- diag(rep(1,d))
+  }
+  
+  if(is.null(prop_settings$log_scale_prop)) {
+    prop_settings$log_scale_prop <- log(2.38) - 0.5*log(d)
+  }
+  
+  # Default adaptation settings.
+  if(is.null(prop_settings$adapt_cov)) {
+    prop_settings$adapt_cov <- TRUE
+  }
+  if(is.null(prop_settings$adapt_scale)) {
+    prop_settings$adapt_scale <- TRUE
+  }
+  if(is.null(prop_settings$accept_rate_target)) {
+    prop_settings$accept_rate_target <- 0.24
+  }
+  if(is.null(prop_settings$adapt_factor_exponent)) {
+    prop_settings$adapt_factor_exponent <- 0.8
+  }
+  if(is.null(prop_settings$adapt_factor_numerator)) {
+    prop_settings$adapt_factor_numerator <- 10
+  }
+  
+  return(prop_settings)
+}
+
+
+prepare_adapt_settings <- function(prop_settings, cov_prop, log_scale_prop, 
+                                   par_samp, itr) {
+  # Assembles a list of arguments to be passed to the function 
+  # `adapt_mh_prop_cov`. Intended to be called right before a call to this 
+  # function. In particular, this function adds the arguments "cov_prop", 
+  # "log_scale_prop", and "samp_history" to the `prop_settings` list.
+  
+  # Determines the length of the sample history that will be used to update
+  # the covariance estimator.
+  adapt_interval <- prop_settings$adapt_interval
+  
+  prop_settings$cov_prop <- cov_prop
+  prop_settings$log_scale_prop <- log_scale_prop
+  prop_settings$samp_history <- par_samp[(itr-adapt_interval+1L):itr,,drop=FALSE]
+  
+  return(prop_settings)
+}
+
+
+increment_accept_count <- function(prop_settings) {
+  prop_settings$times_adapted <- prop_settings$times_adapted + 1L
+  return(prop_settings)
+}
+
+increment_accept_count <- function(prop_settings) {
+  prop_settings$increment_accept_count <- prop_settings$increment_accept_count + 1L
+  return(prop_settings)
+}
+
+
+get_cov_prop_diag_sd <- function(cov_prop, log_scale_prop=NULL) {
+  # A helper function to extract the standard deviations from the covariance
+  # matrix used in the Gaussian proposal of a Metropolis-Hastings algorithm.
+  # In particular, assumes a parameterization of the form 
+  # Cov = exp(2l)*C; here, l is `log_scale_prop` and C is `cov_prop`.
+  # The standard deviations (along the diagonal) are thus of the form 
+  # exp(l)*sqrt(C_ii) where C_ii is a diagonal element of C. 
+  
+  prop_sd <- sqrt(diag(cov_prop))
+  if(!is.null(log_scale_prop)) {
+    prop_sd <- prop_sd * exp(log_scale_prop)
+  }
+  
+  return(prop_sd)
+}
+
+
+# ------------------------------------------------------------------------------
+# Functions for constructing log-likelihood that depends on PEcAn model run.
+# ------------------------------------------------------------------------------
 
 generate_pecan_llik <- function(settings, obs_op, llik) {
 
@@ -125,7 +275,7 @@ generate_pecan_llik <- function(settings, obs_op, llik) {
     PEcAn.workflow::start_model_runs(settings, write=FALSE)
     
     # Compute the model predicted observable quantity.
-    obs_pred <- obs_op(settings, run_id)
+    obs_pred <- obs_op(run_id, settings)
     
     # Evaluate log-likelihood.
     llik(obs_pred)
@@ -149,7 +299,7 @@ eval_pecan_llik <- function(par, llik, run_id=NULL, settings=NULL, obs_op=NULL,
   PEcAn.workflow::start_model_runs(settings, write=FALSE)
   
   # Compute the model predicted observable quantity.
-  obs_pred <- obs_op(settings, run_id)
+  obs_pred <- obs_op(run_id, settings)
   
   # Return the log-likelihood evaluation.
   llik(obs_pred)
@@ -161,7 +311,18 @@ prepare_mcmc_model_run <- function(settings, par, run_id) {
   
   # Write config function expects `par` to be a data.frame, with column 
   # names set to parameter names.
-  par <- as.data.frame.list(par)
+  if(is.atomic(par)) {
+    par <- as.data.frame.list(par)
+  } else if(is.data.frame(par)) {
+    # TODO: this is a hack as SIPNET's write config function expects `trait.values`
+    # to be a list of data.frames (one per PFT). The write config function 
+    # should probably be modified to allow either a list or a single data.frame.
+    par <- list(par)
+  }
+  
+  # Create run and output directories.
+  dir.create(file.path(settings$rundir, run_id), recursive=TRUE)
+  dir.create(file.path(settings$modeloutdir, run_id), recursive=TRUE)
   
   # Write config to file.
   model_write_config <- paste("write.config.", settings$model$type, sep = "")
@@ -177,18 +338,5 @@ prepare_mcmc_model_run <- function(settings, par, run_id) {
       sep = "\n",
       append=FALSE)
 }
-
-
-get_cov_prop_diag_sd <- function(cov_prop, log_scale_prop=NULL) {
-  prop_sd <- sqrt(diag(cov_prop))
-  if(!is.null(log_scale_prop)) {
-    prop_sd <- prop_sd * exp(log_scale_prop)
-  }
-  
-  return(prop_sd)
-}
-
-
-
 
 

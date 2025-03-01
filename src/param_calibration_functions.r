@@ -22,6 +22,10 @@
 
 library(data.table)
 
+# ------------------------------------------------------------------------------
+# Functions for constructing data constraints and likelihood components
+# from annual data. 
+# ------------------------------------------------------------------------------
 
 create_y_vec_annual <- function(obs_mean_list, site_id, output_vars=NULL,
                                 order_first_by_year=TRUE) {
@@ -180,9 +184,7 @@ create_y_noise_cov_annual <- function(obs_cov_list, obs_mean_list, site_id,
   # years and output variables for the single site with site ID `site_id`.
 
   # Extract the output variable and year.
-  dt_order <- as.data.table(data.table::tstrsplit(obs_order, split="_", 
-                                                  fixed=TRUE))
-  colnames(dt_order) <- c("output_var", "year")
+  dt_order <- get_dt_obs_order_from_vec(obs_order)
   
   # Convert names of "obs.mean" and "obs.cov" lists to years.
   names(obs_mean_list) <- year(lubridate::ymd(names(obs_mean_list)))
@@ -240,7 +242,16 @@ extract_site_obs <- function(time_idx, site_id, obs_mean_list) {
 }
 
 
-
+get_dt_obs_order_from_vec <- function(obs_order) {
+  # Converts a character vector with elements of the form `<output_var>_<year>`
+  # to a 2-column data.table with columns "output_var" and "year".
+  
+  dt_order <- as.data.table(data.table::tstrsplit(obs_order, split="_", 
+                                                  fixed=TRUE))
+  colnames(dt_order) <- c("output_var", "year")
+  
+  return(dt_order)
+}
 
 
 
