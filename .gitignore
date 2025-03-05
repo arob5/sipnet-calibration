@@ -1,6 +1,6 @@
 run/
 out/
-*.o
+*.o*
 *.html
 *.log
 *.err
@@ -9,4 +9,4 @@ out/
 *.clim
 *.nc
 *.csv
-
+*CHECKED.xml

@@ -1,0 +1,70 @@
+---
+title: "summarize_model_output"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(eval=TRUE, echo=FALSE)
+
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+library(assertthat)
+library(PEcAn.settings)
+
+# Directories. 
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration", 
+                      "runs", "calibrating_ics")
+src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
+
+
+# Sourcing helper functions.
+source(file.path(src_dir, "general_helper_functions.r"))
+source(file.path(src_dir, "basis_function_emulation.r"))
+source(file.path(src_dir, "plotting_helper_functions.r"))
+
+# Paths to files.
+model_output_path <- file.path(base_dir, "out", "model_output.csv")
+```
+
+```{r}
+# Read model output table.
+model_output <- fread(model_output_path)
+
+# Model output variables.
+output_vars <- setdiff(colnames(model_output),
+                       c("posix", "time", "year", "run_id"))
+```
+
+
+```{r}
+# Plot trajectories of model outputs (sub-sample the ensemble).
+run_ids <- unique(model_output$run_id)
+run_id_sample <- sample(run_ids, size=20)
+
+# Plot model outputs over entire time horizon. 
+for(output in output_vars) {
+  output <- sym(output)
+  plt <- ggplot(data=model_output[run_id %in% run_id_sample]) + 
+          geom_line(aes(x=posix, y=!!output, color=run_id)) + 
+          xlab("time") + theme(legend.position="none")
+  plot(plt)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

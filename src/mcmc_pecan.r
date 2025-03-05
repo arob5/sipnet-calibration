@@ -6,14 +6,14 @@
 # Andrew Roberts
 #
 
-mcmc_mh <- function(settings, llik, lprior, par_names, n_itr, par_init, 
-                    prop_settings=NULL) {
+mcmc_mh <- function(llik, lprior, par_names, n_itr, par_init, 
+                    prop_settings=NULL, settings=NULL) {
   # Metropolis-Hastings with Gaussian proposal distribution. The proposal 
   # covariance is adapted by default.
 
   # Dimension of parameter space. 
   par_init <- drop(par_init)
-  d <- length(par_init)
+  d <- length(par_names)
   if(is.null(names(par_init))) names(par_init) <- par_names
 
   # Objects to store samples and other iteration-dependent information
@@ -25,17 +25,20 @@ mcmc_mh <- function(settings, llik, lprior, par_names, n_itr, par_init,
   
   # Proposal covariance.
   prop_settings <- get_init_mh_prop_settings(prop_settings, d)
+  adapt <- prop_settings$adapt_cov || prop_settings$adapt_scale
   cov_prop <- prop_settings$cov_prop
   log_scale_prop <- prop_settings$log_scale_prop
   L_cov_prop <- t(chol(cov_prop))
 
   # Iteration 1 is taken to be the initial condition.
+  par_curr <- par_init
   lprior_curr <- lprior(par_init)
   if(is.infinite(lprior_curr)) {
     llik_curr <- -Inf
   } else {
-    llik_curr <- llik(par_prop, run_id="itr_1")
+    llik_curr <- llik(par_init, run_id="itr_1")
   }
+  lpost_curr <- lprior_curr + llik_curr
   
   par_samp[1L,] <- par_init 
   chain_info[1L,] <- c(llik_curr, lprior_curr, 
@@ -79,15 +82,14 @@ mcmc_mh <- function(settings, llik, lprior, par_names, n_itr, par_init,
         }
         
         # Adapt proposal covariance matrix and scaling term.
-        if(adapt && (((itr-1) %% adapt_interval) == 0)) {
+        if(adapt && adapt_this_itr(itr, prop_settings$adapt_interval)) {
           prop_settings <- increment_times_adapted(prop_settings)
           prop_settings <- prepare_adapt_settings(prop_settings, cov_prop,
-                                                  log_scale_prop, par_samp,
-                                                  adapt_interval, itr)
-          prop_settings <- do.call(adapt_mh_prop_cov, prop_settings)
-          cov_prop <- prop_settings$cov_prop
-          log_scale_prop <- prop_settings$log_scale_prop
-          if(prop_settings$adapt_cov_prop) L_cov_prop <- prop_settings$L_cov_prop
+                                                  log_scale_prop, par_samp, itr)
+          prop_list <- do.call(adapt_mh_prop_cov, prop_settings)
+          cov_prop <- prop_list$cov_prop
+          log_scale_prop <- prop_list$log_scale_prop
+          if(prop_settings$adapt_cov) L_cov_prop <- prop_list$L_cov_prop
           prop_settings$accept_count <- 0L
         }
         
@@ -118,9 +120,10 @@ mcmc_mh <- function(settings, llik, lprior, par_names, n_itr, par_init,
 # ------------------------------------------------------------------------------
 
 adapt_mh_prop_cov <- function(cov_prop, log_scale_prop, adapt_cov, adapt_scale, 
-                              times_adapted, samp_history, accept_rate, 
-                              accept_rate_target=0.24, adapt_factor_exponent=0.8, 
-                              adapt_factor_numerator=10) {
+                              times_adapted, accept_count, adapt_interval,
+                              samp_history, accept_rate_target=0.24, 
+                              adapt_factor_exponent=0.8, 
+                              adapt_factor_numerator=10, ...) {
   # Follows the adaptive Metropolis scheme used in the Nimble probabilistic 
   # programming language. 
   # Described here: https://arob5.github.io/blog/2024/06/10/adapt-mh/
@@ -141,6 +144,7 @@ adapt_mh_prop_cov <- function(cov_prop, log_scale_prop, adapt_cov, adapt_scale,
   
   return_list <- list()
   adapt_factor <- 1 / (times_adapted + 3)^adapt_factor_exponent
+  accept_rate <- accept_count/adapt_interval
   
   if(adapt_cov) {
     if(accept_rate > 0) {
@@ -200,6 +204,9 @@ get_init_mh_prop_settings <- function(prop_settings, d) {
   if(is.null(prop_settings$adapt_scale)) {
     prop_settings$adapt_scale <- TRUE
   }
+  if(is.null(prop_settings$adapt_interval)) {
+    prop_settings$adapt_interval <- 200L
+  }
   if(is.null(prop_settings$accept_rate_target)) {
     prop_settings$accept_rate_target <- 0.24
   }
@@ -233,14 +240,22 @@ prepare_adapt_settings <- function(prop_settings, cov_prop, log_scale_prop,
 }
 
 
-increment_accept_count <- function(prop_settings) {
+increment_times_adapted <- function(prop_settings) {
   prop_settings$times_adapted <- prop_settings$times_adapted + 1L
   return(prop_settings)
 }
 
 increment_accept_count <- function(prop_settings) {
-  prop_settings$increment_accept_count <- prop_settings$increment_accept_count + 1L
+  prop_settings$accept_count <- prop_settings$accept_count + 1L
   return(prop_settings)
+}
+
+
+adapt_this_itr <- function(itr, adapt_interval) {
+  # Proposal adaptation is run every `adapt_iterval` iterations. Check if
+  # adaptation should be run at iteration `itr`.
+  
+  ((itr-1) %% adapt_interval) == 0
 }
 
 
