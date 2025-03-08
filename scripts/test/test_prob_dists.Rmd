@@ -1,0 +1,78 @@
+---
+title: "Probability Distributions in PEcAn"
+output: html_document
+---
+
+# Defining probability distribution on parameters
+We consider an example whereby prior distributions are placed on ecological
+parameters. The distribution information is stored in a list with one 
+element per multivariate parameter. For example, one can consider an 
+unknown covariance matrix as a single multivariate parameter. Another 
+example is a subset of parameters that must some to one; it makes sense to 
+consider this subset a single multivariate parameter. Each list element is 
+itself a list, with elements:
+- `param_name`: the name of the multivariate parameter.
+- `dist_name`: the name of the probability distribution assigned to the multivariate parameter.
+- `dist_params`: list of parameters defining the probability distribution.
+- `scalar_names`: optional, the names of the individual scalars composing the 
+multivariate parameter. In the case of a scalar parameter, this is not used.
+If not provided in the multivariate case, defaults values are set.
+
+
+# Defining prior distribution information.
+```{r}
+prior_list <- list()
+
+# Dirichlet prior on parameters with sum-to-one constraint.
+prior_list$alloc_pars <- list(
+  param_name = "alloc_pars",
+  dist_name = "Dirichlet",
+  scalar_names = c("root_allocation_fraction", "wood_allocation_fraction",
+                   "leaf_allocation_fraction", "coarse_root_allocation_fraction"),
+  dist_params = list(alpha=c(0.1, 0.5, 0.2, 0.2))
+)
+
+# Beta prior on root turnover rate.
+prior_list$root_turnover_rate <- list(
+  param_name = "root_turnover_rate",
+  dist_name = "Beta",
+  dist_params = list(shape1=2, shape2=4)
+)
+
+# Gamma prior on Amax.
+prior_list$Amax <- list(
+  param_name = "Amax",
+  dist_name = "Gamma",
+  dist_params = list(shape=224, rate=2)
+)
+```
+
+
+```{r}
+# Multivariate parameter names.
+get_param_names(prior_list, flatten=FALSE)
+```
+
+```{r}
+# Scalar parameter names.
+get_param_names(prior_list, flatten=TRUE)
+```
+
+
+# Drawing Samples
+```{r}
+# Get sampling function.
+rprior <- get_sampling_function(prior_list)
+```
+
+```{r}
+# Draw independent samples.
+rprior(10)
+```
+
+
+
+
+
+
+
