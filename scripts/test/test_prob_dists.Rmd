@@ -14,6 +14,10 @@ itself a list, with elements:
 - `param_name`: the name of the multivariate parameter.
 - `dist_name`: the name of the probability distribution assigned to the multivariate parameter.
 - `dist_params`: list of parameters defining the probability distribution.
+- `length`: the total number of scalars making up the multivariate parameter.
+- `constraint`: constraint on the support of the parameter. Currently accepts
+                bound constraints by passing a vector of length 2, or the string
+                "simplex" for a sum-to-one constraint.
 - `scalar_names`: optional, the names of the individual scalars composing the 
 multivariate parameter. In the case of a scalar parameter, this is not used.
 If not provided in the multivariate case, defaults values are set.
@@ -27,6 +31,8 @@ prior_list <- list()
 prior_list$alloc_pars <- list(
   param_name = "alloc_pars",
   dist_name = "Dirichlet",
+  constraint = "simplex",
+  length = 4L,
   scalar_names = c("root_allocation_fraction", "wood_allocation_fraction",
                    "leaf_allocation_fraction", "coarse_root_allocation_fraction"),
   dist_params = list(alpha=c(0.1, 0.5, 0.2, 0.2))
@@ -36,6 +42,8 @@ prior_list$alloc_pars <- list(
 prior_list$root_turnover_rate <- list(
   param_name = "root_turnover_rate",
   dist_name = "Beta",
+  constraint = c(0,1),
+  length = 1L,
   dist_params = list(shape1=2, shape2=4)
 )
 
@@ -43,6 +51,8 @@ prior_list$root_turnover_rate <- list(
 prior_list$Amax <- list(
   param_name = "Amax",
   dist_name = "Gamma",
+  constraint = c(0, Inf),
+  length = 1L,
   dist_params = list(shape=224, rate=2)
 )
 ```
@@ -62,14 +72,35 @@ get_param_names(prior_list, flatten=TRUE)
 # Drawing Samples
 ```{r}
 # Get sampling function.
-rprior <- get_sampling_function(prior_list)
+rprior <- get_sampling_func(prior_list)
 ```
 
 ```{r}
 # Draw independent samples.
-rprior(10)
+samp <- rprior(10)
+print(samp)
 ```
 
+# Evaluating log-density
+```{r}
+# Get log density function.
+lprior <- get_log_density_func(prior_list)
+```
+
+```{r}
+# Evaluate log-density at sampled points.
+lprior(samp)
+```
+
+```{r}
+# Evaluations outside of prior support return -Inf.
+test_par_outside_supp <- samp
+test_par_outside_supp[2,"root_allocation_fraction"] <- 100 # Violates sum-to-one constraint.
+test_par_outside_supp[4,"root_turnover_rate"] <- 2 # Violates (0,1) bounds.
+test_par_outside_supp[5,"Amax"] <- -1 # Violates nonnegativity.
+
+lprior(test_par_outside_supp)
+```
 
 
 
