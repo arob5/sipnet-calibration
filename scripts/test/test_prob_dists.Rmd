@@ -102,6 +102,44 @@ test_par_outside_supp[5,"Amax"] <- -1 # Violates nonnegativity.
 lprior(test_par_outside_supp)
 ```
 
+# Parameter Transformations
+
+```{r}
+# Get forward and inverse default parameter transformations.
+par_maps <- get_par_map_funcs(prior_list)
+```
+
+
+The transformed parameters are given names in a standardized format, which are 
+based on the parameter names in `prior_list` (note: not the scalar names). 
+The dimension of the transformed parameters may slightly differ from the 
+dimension of original parameters; currently the only way this can happen is 
+for simplex-valued parameters. Parameters lying on the d-simplex can be 
+represented with only d-1 values, so the transformed parameter has dimension 
+one lower than the original.
+
+```{r}
+# Transform to unconstrained space.
+phi <- par_maps$fwd(samp)
+print(phi)
+```
+
+The inverse map also has attribute `log_det_J` which is a vector of the log of 
+the Jacobian determinant factor that appears in the change-of-variables 
+formula (the vector has one element per input). This is used in computing the 
+density of the transformed variables.
+```{r}
+# Transform back.
+par <- par_maps$inv(phi)
+print(par)
+```
+
+```{r}
+# Other than the log_det_J attribute, should map back to the original parameters.
+print(paste0("Param order maintained: ", all(colnames(par)==colnames(samp))))
+print(paste0("Inverse mapped back to same parameter values: ", 
+             all.equal(par, samp, check.attributes=FALSE)))
+```
 
 
 
