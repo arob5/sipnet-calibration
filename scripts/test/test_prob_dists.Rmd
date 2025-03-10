@@ -22,6 +22,17 @@ itself a list, with elements:
 multivariate parameter. In the case of a scalar parameter, this is not used.
 If not provided in the multivariate case, defaults values are set.
 
+```{r}
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration")
+src_dir <- file.path(base_dir, "src")
+
+pecan_base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration")
+pecan_src_dir <- file.path(pecan_base_dir, "src")
+
+source(file.path(src_dir, "general_helper_functions.r"))
+source(file.path(pecan_src_dir, "prob_dists.r"))
+```
+
 
 # Defining prior distribution information.
 ```{r}

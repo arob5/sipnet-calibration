@@ -49,7 +49,7 @@ source(file.path(src_dir, "basis_function_emulation.r"))
 source(file.path(src_dir, "plotting_helper_functions.r"))
 source(file.path(pecan_src_dir, "param_calibration_functions.r"))
 source(file.path(pecan_src_dir, "mcmc_pecan.r"))
-
+source(file.path(pecan_src_dir, "prob_dists.r"))
 
 # ------------------------------------------------------------------------------
 # General setup.  
@@ -75,7 +75,7 @@ dir.create(settings$modeloutdir)
 PEcAn.settings::write.settings(settings, outputfile="pecan.CHECKED.xml")
 
 # Specify the number of MCMC iterations.
-n_mcmc_itr <- 2L
+n_mcmc_itr <- 20L
 
 # Set so that all model runs are run on the same job, no new qsub jobs are
 # dispatched.
@@ -83,156 +83,94 @@ settings$host <- list(name="localhost")
 
 
 # ------------------------------------------------------------------------------
-# Specify parameters and initial conditions to vary.
-#  Note that the names of the params/ICs must follow the PEcAn naming standards;
-#  they will be converted to SIPNET parameters in `write.config.SIPNET()`.
-#  Parameter names can be passed to this function by PFT; we make no PFT 
-#  distinctions here and lump all parameters together.
+# Specify calibration parameters and their prior distributions.
 # ------------------------------------------------------------------------------
 
-# Parameter names. Note that `root_allocation_fraction` maps to the SIPNET 
+prior_list <- list()
+
+# Dirichlet prior on allocation parameters with sum-to-one constraint.
+# Note that `root_allocation_fraction` maps to the SIPNET 
 # fine root allocation parameter. The parameter `coarse_root_allocation_fraction`
 # does not actually exist; it is implicitly defined as 1 minus the sum of the 
 # other allocation parameters. We introduce it here for the purpose of 
 # defining a Dirichlet prior on the allocation parameters. It will be
 # removed before being passed to the write config function.
-alloc_pars <- c("root_allocation_fraction", "wood_allocation_fraction",
-                "leaf_allocation_fraction", "coarse_root_allocation_fraction")
-alpha_alloc <- setNames(c(0.1, 0.5, 0.2, 0.2), alloc_pars)
-param_names <- c(alloc_pars, "root_turnover_rate", "Amax")
-exclude_par <- "coarse_root_allocation_fraction"
+prior_list$alloc_pars <- list(
+  param_name = "alloc_pars",
+  dist_name = "Dirichlet",
+  constraint = "simplex",
+  length = 4L,
+  scalar_names = c("root_allocation_fraction", "wood_allocation_fraction",
+                   "leaf_allocation_fraction", "coarse_root_allocation_fraction"),
+  dist_params = list(alpha=c(0.1, 0.5, 0.2, 0.2))
+)
 
-# Initial conditions.
-wood_frac_pars <- c("abvGrndWoodFrac", "coarseRootFrac", "fineRootFrac")
-alpha_wood_fracs <- setNames(c(0.8, 0.1, 0.1), wood_frac_pars)
-ic_names <- c(wood_frac_pars, "AbvGrndWood", "soil")
+# Fractions controlling initial conditions for various wood pools. Also 
+# subject to sum-to-one constraint.
+prior_list$wood_frac_pars <- list(
+  param_name = "wood_frac_pars",
+  dist_name = "Dirichlet",
+  constraint = "simplex",
+  length = 3L,
+  scalar_names = c("abvGrndWoodFrac", "coarseRootFrac", "fineRootFrac"),
+  dist_params = list(alpha=c(0.8, 0.1, 0.1))
+)
 
-# This is the full set of parameter names that will be calibrated.
-all_par_names <- setdiff(c(param_names, ic_names), exclude_par)
+# Aboveground wood initial condition. Note that this represents the total wood
+# IC (which is not explicitly specified) times `abvGrndWoodFrac`.
+prior_list$AbvGrndWood <- list(
+  param_name = "AbvGrndWood",
+  dist_name = "Gamma",
+  constraint = c(0, Inf),
+  length = 1L,
+  dist_params = list(shape=10, rate=6.25e-05)
+)
 
+# Soil IC.
+prior_list$soil <- list(
+  param_name = "soil",
+  dist_name = "Gamma",
+  constraint = c(0, Inf),
+  length = 1L,
+  dist_params = list(shape=10, rate=5e-04)
+)
 
-# ------------------------------------------------------------------------------
-# Specify prior distributions.
-# ------------------------------------------------------------------------------
+# Root turnover rate constrained to (0,1).
+prior_list$root_turnover_rate <- list(
+  param_name = "root_turnover_rate",
+  dist_name = "Beta",
+  constraint = c(0,1),
+  length = 1L,
+  dist_params = list(shape1=2, shape2=4)
+)
 
-# 
-# Prior density.
-#    Note that the functions in the elements of `lprior_list` are defined to
-#    accept an argument `par`, which is the entire parameter vector with names
-#    attribute set. The subset of the parameter corresponding to the relevant
-#    parameter group is extracted by name. This is not an elegant way to do this,
-#    but is implemented this way just in the interest of running a quick test.
-#
-
-lprior_list <- list()
-
-lprior_list$alloc_pars <- function(par) {
-  core_alloc_pars <- setdiff(alloc_pars, exclude_par)
-  par <- c(par[core_alloc_pars], 
-           coarse_root_allocation_fraction=1-sum(par[core_alloc_pars])) # Attach coarse root allocation.
-  par <- par[alloc_pars]
-  
-  lprior_val <- try(LaplacesDemon::ddirichlet(par, alpha_alloc, log=TRUE), silent=TRUE)
-  if(class(lprior_val)=="try-error") return(-Inf)
-  return(lprior_val)
-}
-
-lprior_list$wood_frac_pars <- function(par) {
-  par <- par[wood_frac_pars]
-  lprior_val <- try(LaplacesDemon::ddirichlet(par, alpha_wood_fracs, log=TRUE), silent=TRUE)
-  if(class(lprior_val)=="try-error") return(-Inf)
-  return(lprior_val)
-}
-
-lprior_list$root_turnover_rate <- function(par) {
-  par <- par["root_turnover_rate"]
-  dbeta(par, shape1=2, shape2=4, log=TRUE)
-}
-
-lprior_list$Amax <- function(par) {
-  par <- par["Amax"]
-  dgamma(par, shape=224, rate=2, log=TRUE)
-}
-
-lprior_list$AbvGrndWood <- function(par) {
-  par <- par["AbvGrndWood"]
-  dgamma(par, shape=10, rate=6.25e-05, log=TRUE)
-}
-
-# Define the log-prior function. `par` must be a character vector with names 
-# set to the values in `all_par_names`.
-lprior <- function(par) {
-  sum(sapply(lprior_list, function(log_prior) log_prior(par)))
-}
-
-
-# 
-# Sampling from prior.
-#   Samples from the prior are used in this script only for estimating the 
-#   prior covariance to initialize the MCMC proposal covariance.
-#
-
-rprior_list <- list()
-
-# Allocation parameters
-rprior_list$alloc_pars <- function(n) {
-  alloc_par_design <- LaplacesDemon::rdirichlet(n, alpha_alloc)
-  colnames(alloc_par_design) <- alloc_pars
-  alloc_par_design[, setdiff(alloc_pars, exclude_par), drop=FALSE]
-}
-
-# Root turnover rate
-rprior_list$root_turnover_rate <- function(n) {
-  matrix(rbeta(n, shape1=2, shape2=4), ncol=1, dimnames=list(NULL, "root_turnover_rate"))
-}
-
-# Amax
-rprior_list$Amax <- function(n) {
-  matrix(rgamma(n, shape=224, rate=2), ncol=1, dimnames=list(NULL, "Amax"))
-}
-
-# Fraction initial condition parameters.
-rprior_list$frac_pars <- function(n) {
-  frac_par_design <- LaplacesDemon::rdirichlet(n, alpha_wood_fracs)
-  colnames(frac_par_design) <- wood_frac_pars
-  return(frac_par_design)
-}
-
-# Aboveground wood initial condition (in SIPNET not PEcAn units).
-rprior_list$AbvGrndWood <- function(n) {
-  matrix(rgamma(n, shape=10, rate=6.25e-05), ncol=1, dimnames=list(NULL, "AbvGrndWood"))
-}
-
-# Soil pool initial condition (in SIPNET not PEcAn units).
-rprior_list$soil <- function(n) {
-  matrix(rgamma(n, shape=10, rate=5e-04), ncol=1, dimnames=list(NULL, "soil"))
-}
+# Amax constrained to be nonnegative.
+prior_list$Amax <- list(
+  param_name = "Amax",
+  dist_name = "Gamma",
+  constraint = c(0, Inf),
+  length = 1L,
+  dist_params = list(shape=224, rate=2)
+)
 
 
 # ------------------------------------------------------------------------------
 # Sample parameter values from prior to initialize MCMC settings.
 # ------------------------------------------------------------------------------
 
-# Function to generate parameter design.
-sample_prior <- function(n) {
-  samp_list <- lapply(rprior_list, function(f) f(n))
-  par_samp <- do.call(cbind, samp_list)
-  par_samp[,all_par_names, drop=FALSE]
-}
-
 # Number of design points to sample from prior.
 n_prior_samp <- 10000L
 
-# Assemble design and ensure that all parameters are present.
-par_prior_samp <- sample_prior(n_prior_samp)
-
-if(!all(colnames(par_prior_samp) == all_par_names)) {
-  stop("Parameter names or order disagrees with `all_par_names`.")
-}
+# Sample from prior, and convert to unconstrained space. We use "phi" when 
+# referring to the transformed/unconstrained parameters.
+lprior <- get_sampling_func(prior_list)
+par_maps <- get_par_map_funcs(prior_list)
+par_samp <- lprior(n_prior_samp)
+phi_samp <- par_maps$fwd(par_samp)
 
 # Estimate prior mean and covariance for use in initializing MCMC.
-prior_mean <- colMeans(par_prior_samp)
-prior_cov <- cov(par_prior_samp)
+prior_mean <- colMeans(phi_samp)
+prior_cov <- cov(phi_samp)
 
 # ------------------------------------------------------------------------------
 # Set up likelihood function.

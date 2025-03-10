@@ -6,11 +6,48 @@
 # Andrew Roberts
 #
 
+run_mcmc <- function(llik, prior_list, n_itr, n_chains=4L, prop_settings) {
+  # A wrapper around `mcmc_mh()` that handles the running of multiple chains,
+  # and parameter transformations for constrained parameters.
+  
+  # Get prior density, parameter transformation maps, and sampling function.
+  par_names <- get_param_names(prior_list, flatten=TRUE)
+  lprior <- get_log_density_func(prior_list)
+  par_maps <- get_par_map_funcs(prior_list)
+  rprior <- get_sampling_func(prior_list)
+  
+  # Construct density of transformed (unconstrained) variables.
+  lprior_phi <- function(phi) {
+    par <- par_maps$inv(phi)
+    log_det_J <- attr(par, "log_det_J")
+    
+    lprior(par) + log_det_J
+  }
+  
+  # Adjust llik to account for parameter transformation.
+  llik_phi <- function(phi, ...) {
+    llik(par_maps$inv(phi), ...)
+  }
+  
+  # Initial condition.
+  par_init <- rprior(1)
+  phi_init <- par_maps$fwd(par_init)
+  
+  mcmc_output <- mcmc_mh(llik_phi, lprior_phi, 
+                         par_names=colnames(phi_init), n_itr=n_itr,
+                         prop_settings=prop_settings)
+  
+  return(mcmc_output)
+}
+
+
 mcmc_mh <- function(llik, lprior, par_names, n_itr, par_init, 
                     prop_settings=NULL, settings=NULL) {
   # Metropolis-Hastings with Gaussian proposal distribution. The proposal 
   # covariance is adapted by default.
 
+  browser()
+  
   # Dimension of parameter space. 
   par_init <- drop(par_init)
   d <- length(par_names)

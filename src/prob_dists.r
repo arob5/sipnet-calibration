@@ -209,7 +209,7 @@ get_par_map_funcs <- function(dist_list) {
   par_map <- function(par) {
     if(is.null(dim(par))) par <- matrix(par, nrow=1L)
     phi_list <- vector(mode="list", length=length(dist_list))
-    
+
     for(i in seq_along(dist_list)) {
       scalar_names <- get_scalar_param_names(dist_list[[i]])
       phi_list[[i]] <- par_map_list[[i]]$fwd(par[,scalar_names, drop=FALSE])
@@ -249,7 +249,7 @@ get_dist_par_maps <- function(dist_info) {
   if(isTRUE(constraint == "simplex")) {
     map_func <- simplex_map
     inv_map_func <- inv_simplex_map
-  } else if(length(constraint)==2) {
+  } else if(length(constraint)==2L) {
     map_funcs <- get_bound_constraint_map_funcs(constraint)
     map_func <- map_funcs$fwd
     inv_map_func <- map_funcs$inv
@@ -315,9 +315,10 @@ logit_map <- function(par, a=0, b=1) {
   if(a >= b) {
     stop("`a` < `b` must hold.")
   }
-  
+
   log((par - a) / (b - par))
 }
+
 
 
 inv_logit_map <- function(phi, a=0, b=1) {
@@ -336,7 +337,20 @@ inv_logit_map <- function(phi, a=0, b=1) {
     stop("`a` < `b` must hold.")
   }
   
-  inverse_logit <- 1/(1 + exp(-phi))
+  # This creates a deep copy for all supported input types for `phi` (vector,
+  # matrix).
+  inverse_logit <- phi
+  
+  # For positive values, use form that avoids numerical overflow.
+  sel_geq_0 <- (phi >= 0)
+  inverse_logit[sel_geq_0] <- 1/(1 + exp(-phi[sel_geq_0]))
+  
+  # For negative values, use form that avoids numerical overflow. When 
+  # input is very small, e^x/(1+e^x) is approx e^x.
+  sel_l_0 <- !sel_geq_0
+  inverse_logit[sel_l_0] <- exp(phi[sel_l_0]) / (1 + exp(phi[sel_l_0]))
+
+  # Map to (a,b).
   par <- a + inverse_logit * (b-a)
   attr(par, "log_det_J") <- log(b-a) + log(inverse_logit) + log(1-inverse_logit)
   
@@ -422,9 +436,14 @@ simplex_map <- function(par) {
   #
   # Map `z` to unconstrained variables `phi`.
   #
-  
+
+  # In some cases, some of the later components account for almost none of the
+  # stick length. In these cases, due to numerical rounding, some of the 
+  # z variables can be slightly above 1. We round these down to a number 
+  # slightly less than 1.
+  z[z >= 1] <- 1 - .Machine$double.eps
   phi <- logit_map(z)
-  shift <- -log(1/(d-seq(1,d-1)))
+  shift <- log(d-seq(1,d-1))
   add_vec_to_mat_rows(shift, phi)
 }
 
@@ -444,7 +463,7 @@ inv_simplex_map <- function(phi) {
   d <- ncol(phi) + 1L
   
   # Map to intermediate variables.
-  shift <- log(1/(d-seq(1,d-1)))
+  shift <- -log(d-seq(1,d-1))
   z <- inv_logit_map(add_vec_to_mat_rows(shift, phi))
   
   # Map to simplex.
