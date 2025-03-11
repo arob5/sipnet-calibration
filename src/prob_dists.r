@@ -207,7 +207,7 @@ get_par_map_funcs <- function(dist_list) {
   
   # Map constrained to unconstrained.
   par_map <- function(par) {
-    if(is.null(dim(par))) par <- matrix(par, nrow=1L)
+    if(is.null(dim(par))) par <- matrix(par, nrow=1L, dimnames=list(NULL, names(par)))
     phi_list <- vector(mode="list", length=length(dist_list))
 
     for(i in seq_along(dist_list)) {
@@ -220,7 +220,7 @@ get_par_map_funcs <- function(dist_list) {
   
   # Map unconstrained to constrained.
   inv_par_map <- function(phi) {
-    if(is.null(dim(phi))) phi <- matrix(phi, nrow=1L)
+    if(is.null(dim(phi))) phi <- matrix(phi, nrow=1L, dimnames=list(NULL, names(phi)))
     par_list <- vector(mode="list", length=length(dist_list))
     log_det_J <- rep(0, nrow(phi))
 

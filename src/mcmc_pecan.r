@@ -33,8 +33,8 @@ run_mcmc <- function(llik, prior_list, n_itr, n_chains=4L, prop_settings) {
   par_init <- rprior(1)
   phi_init <- par_maps$fwd(par_init)
   
-  mcmc_output <- mcmc_mh(llik_phi, lprior_phi, 
-                         par_names=colnames(phi_init), n_itr=n_itr,
+  mcmc_output <- mcmc_mh(llik_phi, lprior_phi, n_itr=n_itr, par_init=phi_init,
+                         par_names=colnames(phi_init), 
                          prop_settings=prop_settings)
   
   return(mcmc_output)
@@ -46,8 +46,6 @@ mcmc_mh <- function(llik, lprior, par_names, n_itr, par_init,
   # Metropolis-Hastings with Gaussian proposal distribution. The proposal 
   # covariance is adapted by default.
 
-  browser()
-  
   # Dimension of parameter space. 
   par_init <- drop(par_init)
   d <- length(par_names)
@@ -58,7 +56,7 @@ mcmc_mh <- function(llik, lprior, par_names, n_itr, par_init,
   par_samp <- matrix(nrow=n_itr, ncol=d)
   chain_info <- matrix(nrow=n_itr, ncol=d+2L)
   colnames(par_samp) <- par_names
-  colnames(chain_info) <- c("llik", "lprior", par_names)
+  colnames(chain_info) <- c("llik", "lprior", paste0("prop_sd_", par_names))
   
   # Proposal covariance.
   prop_settings <- get_init_mh_prop_settings(prop_settings, d)

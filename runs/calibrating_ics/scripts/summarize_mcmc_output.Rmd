@@ -1,0 +1,84 @@
+---
+title: "summarize_mcmc_output"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(eval=TRUE, echo=FALSE)
+
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+library(assertthat)
+library(PEcAn.settings)
+
+# Directories. 
+base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration", 
+                      "runs", "calibrating_ics")
+src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
+pecan_src_dir <- file.path("/projectnb", "dietzelab", "arober",
+                           "sipnet_calibration", "src")
+
+
+# Sourcing helper functions.
+source(file.path(src_dir, "general_helper_functions.r"))
+source(file.path(src_dir, "basis_function_emulation.r"))
+source(file.path(src_dir, "plotting_helper_functions.r"))
+source(file.path(src_dir, "mcmc_helper_functions.r"))
+source(file.path(pecan_src_dir, "prob_dists.r"))
+
+# Paths to files.
+prior_path <- file.path(base_dir, "mcmc", "prior_list.rds")
+mcmc_path <- file.path(base_dir, "mcmc", "mcmc_output.rds")
+
+# Burn-in for MCMC.
+burn_in_start <- 5000L
+```
+
+```{r}
+# Read prior distribution list.
+prior_list <- readRDS(prior_path)
+par_maps <- get_par_map_funcs(prior_list)
+```
+
+
+```{r}
+# Read MCMC output. 
+mcmc_output <- readRDS(mcmc_path)
+names(mcmc_output$samp) <- "phi"
+samp_dt <- format_mcmc_output(mcmc_output$samp, test_label="mcmc_mh")
+info_dt <- format_mcmc_output(mcmc_output$info, test_label="mcmc_mh")
+
+# Map samples back to constrained space.
+par_samp <- par_maps$inv(mcmc_output$samp$phi)
+samp_dt <- append_samples_mat(samp_dt, par_samp, param_type="par", 
+                              test_label="mcmc_mh")
+```
+
+```{r}
+# Trace plots: unconstrained space.
+trace_plots <- get_trace_plots(samp_dt, param_types="phi", itr_start=burn_in_start)
+for(plt in trace_plots) plot(plt)
+```
+
+```{r}
+# Trace plots: constrained space.
+trace_plots <- get_trace_plots(samp_dt, param_types="par", itr_start=burn_in_start)
+for(plt in trace_plots) plot(plt)
+```
+
+```{r}
+# Trace plots: log-likelihood and log-prior trajectories.
+trace_plots_dens <- get_trace_plots(info_dt, param_names=c("llik", "lprior"))
+for(plt in trace_plots_dens) plot(plt)
+```
+
+
+
+
+
+
+

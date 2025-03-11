@@ -20,28 +20,49 @@ library(ggplot2)
 library(data.table)
 library(assertthat)
 library(lubridate)
+library(tictoc)
+library(docopt)
+
+# -----------------------------------------------------------------------------
+# docopt string for parsing command line arguments.  
+# -----------------------------------------------------------------------------
+
+"Usage:
+  test_docopt.r [options]
+  test_docopt.r (-h | --help)
+
+Options:
+  -h --help                                 Show this screen.
+  --n_mcmc_itr=<n_mcmc_itr>                 Number of MCMC iterations (integer)
+  --chain_idx=<chain_idx>                   MCMC chain index (integer)
+" -> doc
+
+# Read command line arguments.
+cmd_args <- docopt(doc)
+n_mcmc_itr <- as.integer(cmd_args$n_mcmc_itr)
+chain_idx <- as.integer(cmd_args$chain_idx)
+chain_lbl <- paste0("chain_", chain_idx)
 
 # ------------------------------------------------------------------------------
 # User-specified settings/filepaths.  
 # ------------------------------------------------------------------------------
 
-# Directories. `base_out_dir` will be used to overwrite the settings `outdir`,
+# Directories. `chain_dir` will be used to overwrite the settings `outdir`,
 # and will be used at the base output directory for the MCMC run.
 base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration")
 pecan_base_dir <- file.path(base_dir, "runs", "calibrating_ics")
 src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
 pecan_src_dir <- file.path(base_dir, "src")
-base_out_dir <- file.path(pecan_base_dir, "mcmc")
+mcmc_dir <- file.path(pecan_base_dir, "mcmc")
+chain_dir <- file.path(mcmc_dir, chain_lbl)
 
 # PEcAn XML path
 pecan_settings_path <- file.path(pecan_base_dir, "sipnet_calibration.xml")
 
 # Paths to constraint data, used to define observation vector "y" used in 
 # calibration.
-obs_mean_path <- file.path("/projectnb", "dietzelab", "dongchen", "anchorSites",
-                           "Obs", "Rdata", "obs.mean.Rdata")
-obs_cov_path <- file.path("/projectnb", "dietzelab", "dongchen", "anchorSites", 
-                          "Obs", "Rdata", "obs.cov.Rdata")
+obs_mean_path <- "/projectnb/dietzelab/dongchen/anchorSites/NA_runs/Obs/obs.mean.Rdata"
+obs_cov_path <- "/projectnb/dietzelab/dongchen/anchorSites/NA_runs/Obs/obs.cov.Rdata"
 
 # Sourcing helper functions.
 source(file.path(src_dir, "general_helper_functions.r"))
@@ -59,34 +80,39 @@ source(file.path(pecan_src_dir, "prob_dists.r"))
 settings <- PEcAn.settings::read.settings(inputfile=pecan_settings_path)
 
 # Update output directories.
-settings$outdir <- base_out_dir
-settings$modeloutdir <- file.path(base_out_dir, "out")
-settings$rundir <- file.path(base_out_dir, "run")
+settings$outdir <- chain_dir
+settings$modeloutdir <- file.path(chain_dir, "out")
+settings$rundir <- file.path(chain_dir, "run")
 
 # Check/validate settings. 
 settings <- PEcAn.settings::prepare.settings(settings, force=FALSE)
 
 # Create directories, if not already created. 
-dir.create(settings$outdir)
-dir.create(settings$rundir)
-dir.create(settings$modeloutdir)
+dir.create(settings$outdir, recursive=TRUE)
+dir.create(settings$rundir, recursive=TRUE)
+dir.create(settings$modeloutdir, recursive=TRUE)
 
 # Write validated settings. 
 PEcAn.settings::write.settings(settings, outputfile="pecan.CHECKED.xml")
-
-# Specify the number of MCMC iterations.
-n_mcmc_itr <- 20L
 
 # Set so that all model runs are run on the same job, no new qsub jobs are
 # dispatched.
 settings$host <- list(name="localhost")
 
+# Load SIPNET package.
+model_write_config <- paste("write.config.", settings$model$type, sep = "")
+PEcAn.utils::load.modelpkg(settings$model$type)
 
 # ------------------------------------------------------------------------------
 # Specify calibration parameters and their prior distributions.
 # ------------------------------------------------------------------------------
 
 prior_list <- list()
+pecan_ic_names <- c("abvGrndWoodFrac", "coarseRootFrac", "fineRootFrac", 
+                    "AbvGrndWood", "soil")
+pecan_par_names <- c("root_turnover_rate", "Amax", "root_allocation_fraction", 
+                     "wood_allocation_fraction", "leaf_allocation_fraction")
+
 
 # Dirichlet prior on allocation parameters with sum-to-one constraint.
 # Note that `root_allocation_fraction` maps to the SIPNET 
@@ -153,6 +179,7 @@ prior_list$Amax <- list(
   dist_params = list(shape=224, rate=2)
 )
 
+saveRDS(prior_list, file.path(settings$outdir, "prior_list.rds"))
 
 # ------------------------------------------------------------------------------
 # Sample parameter values from prior to initialize MCMC settings.
@@ -179,16 +206,25 @@ prior_cov <- cov(phi_samp)
 load(obs_mean_path)
 load(obs_cov_path)
 
-constraint_vars <- c("LAI", "AbvGrndWood")
+constraint_vars <- c("LAI", "AbvGrndWood", "TotSoilCarb")
 
+# TODO: TEMP - manually setting this for now.
 # Specify single site.
-site_id <- settings$run$site$id
+# site_id <- settings$run$site$id
+site_id <- 3380
 
-# Data vector, determines observation order convention.
+# Data vector, determines observation order convention. Soil carbon obs are 
+# constant across years so we're only keeping the first one. Also cap 
+# at 2021 for now.
 y_obs <- create_y_vec_annual(obs.mean, site_id=site_id, 
                              output_vars=constraint_vars, 
                              order_first_by_year=TRUE)
-obs_order <- names(y_obs)
+drop_vars <- paste0("TotSoilCarb_", 2013:2021)
+obs_order <- setdiff(names(y_obs), drop_vars)
+dt_order <- get_dt_obs_order_from_vec(obs_order)
+dt_order <- dt_order[year <= 2021]
+obs_order <- paste(dt_order$output_var, dt_order$year, sep="_")
+y_obs <- y_obs[obs_order]
 dim_obs <- length(drop(y_obs))
 
 # Observation covariance matrix.
@@ -238,14 +274,17 @@ obs_op <- function(run_id, settings) {
 
 prepare_mcmc_model_run <- function(settings, par, run_id) {
   # `par` must be a names attribute set.
+
+  # Should be a named vector. 
+  par <- drop(par)
   
   # Extract model initial conditions. Write config function expects this 
   # to be a named list.
-  ic <- as.list(par[ic_names])
+  ic <- as.list(par[pecan_ic_names])
   
   # Extract model parameters. Write config function expects `par` to be a 
   # list of data.frames, with column names set to parameter names.
-  par <- par[setdiff(param_names, exclude_par)]
+  par <- par[pecan_par_names]
   par <- as.data.frame.list(par)
   
   # Create run and output directories.
@@ -289,17 +328,16 @@ llik <- function(par, run_id) {
 # Run MCMC
 # ------------------------------------------------------------------------------
 
-d <- length(all_par_names)
+d <- ncol(prior_cov)
 cov_prop_init <- prior_cov + diag(1e-8, nrow=d, ncol=d)
 
-mcmc_output <- mcmc_mh(llik, lprior, par_names=all_par_names, n_itr=n_mcmc_itr, 
-                       par_init=prior_mean, prop_settings=list(cov_prop=cov_prop_init))
+tic()
+mcmc_output <- run_mcmc(llik, prior_list, n_itr=n_mcmc_itr, n_chains=1L,
+                        prop_settings=list(cov_prop=cov_prop_init))
+print("MCMC runtime:")
+toc()
 
-
-
-
-
-
+saveRDS(mcmc_output, file.path(chain_dir, "mcmc_output.rds"))
 
 
 
