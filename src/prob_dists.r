@@ -166,7 +166,7 @@ get_sampling_func <- function(dist_list) {
 
 get_dist_sampling_func <- function(dist_info) {
   # `dist_info` must have arguments "dist_name" and "dist_params".
-  
+
   dist_name <- dist_info$dist_name
   dist_params <- dist_info$dist_params
   
@@ -190,6 +190,37 @@ get_dist_sampling_func <- function(dist_info) {
   }
   
   return(sampling_func)
+}
+
+
+convert_par_info_to_list <- function(par_info) {
+  # A temporary function to convert the data.frame representation of prior
+  # distributions for independent scalar parameters to the list format
+  # used by the new PEcAn functions.
+  
+  prior_list <- list()
+  
+  for(i in 1:nrow(par_info)) {
+    par_name <- par_info$par_name[i]
+    dist_name <- par_info$dist[i]
+    bounds <- c(par_info$bound_lower[i], par_info$bound_upper[i])
+    param1 <- par_info$param1[i]
+    param2 <- par_info$param2[i]
+    
+    if(dist_name == "Gaussian") dist_params <- list(mean=param1, sd=param2)
+    else if(dist_name == "Uniform") dist_params <- list(min=param1, max=param2)
+    else if(dist_name == "Gamma") dist_params <- list(shape=param1, rate=param2)
+    else if(dist_name == "Beta") dist_params <- list(shape1=param1, shape2=param2)
+    else {
+      stop("Distribution `", dist_name, "` not supported by `convert_par_info_to_list()`.")
+    }
+    
+    prior_list[[par_name]] <- list(param_name=par_name, dist_name=dist_name,
+                                   constraint=bounds, dist_params=dist_params,
+                                   len=1L)
+  }
+  
+  return(prior_list)
 }
 
 

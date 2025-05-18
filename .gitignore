@@ -10,3 +10,4 @@ out/
 *.nc
 *.csv
 *CHECKED.xml
+*.rds

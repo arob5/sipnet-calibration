@@ -1,6 +1,8 @@
 ---
 title: "summarize_mcmc_output"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -21,7 +23,12 @@ base_dir <- file.path("/projectnb", "dietzelab", "arober", "sipnet_calibration",
 src_dir <- file.path("/projectnb", "dietzelab", "arober", "gp-calibration", "src")
 pecan_src_dir <- file.path("/projectnb", "dietzelab", "arober",
                            "sipnet_calibration", "src")
+stat_model_dir <- file.path(base_dir, "statistical_model")
+mcmc_dir <- file.path(base_dir, "mcmc")
+eki_dir <- file.path(base_dir, "eki")
 
+# PEcAn XML path
+pecan_settings_path <- file.path(base_dir, "sipnet_calibration.xml")
 
 # Sourcing helper functions.
 source(file.path(src_dir, "general_helper_functions.r"))
@@ -29,39 +36,138 @@ source(file.path(src_dir, "basis_function_emulation.r"))
 source(file.path(src_dir, "plotting_helper_functions.r"))
 source(file.path(src_dir, "mcmc_helper_functions.r"))
 source(file.path(pecan_src_dir, "prob_dists.r"))
-
-# Paths to files.
-prior_path <- file.path(base_dir, "mcmc", "prior_list.rds")
-mcmc_path <- file.path(base_dir, "mcmc", "mcmc_output.rds")
+source(file.path(pecan_src_dir, "param_calibration_functions.r"))
 
 # Burn-in for MCMC.
-burn_in_start <- 5000L
+burn_in_start <- c(mcmc_mh=25000L)
+
+# Info used when loading outputs from algorithms.
+n_chains <- 4L
+n_eki_itr <- 3L
 ```
+
+```{r}
+# Read settings. 
+settings <- PEcAn.settings::read.settings(inputfile=pecan_settings_path)
+```
+
 
 ```{r}
 # Read prior distribution list.
-prior_list <- readRDS(prior_path)
+prior_list <- readRDS(file.path(stat_model_dir, "prior_list.rds"))
 par_maps <- get_par_map_funcs(prior_list)
-```
+rprior <- get_sampling_func(prior_list)
 
+# Distinguish between ICs and parameters.
+ic_vs_par_list <- readRDS(file.path(stat_model_dir, "ic_vs_par_list.rds"))
+pecan_ic_names <- ic_vs_par_list$ic_names
+pecan_par_names <- ic_vs_par_list$par_names
+```
 
 ```{r}
-# Read MCMC output. 
-mcmc_output <- readRDS(mcmc_path)
-names(mcmc_output$samp) <- "phi"
-samp_dt <- format_mcmc_output(mcmc_output$samp, test_label="mcmc_mh")
-info_dt <- format_mcmc_output(mcmc_output$info, test_label="mcmc_mh")
-
-# Map samples back to constrained space.
-par_samp <- par_maps$inv(mcmc_output$samp$phi)
-samp_dt <- append_samples_mat(samp_dt, par_samp, param_type="par", 
-                              test_label="mcmc_mh")
+# Read likelihood information.
+lik_list <- readRDS(file.path(stat_model_dir, "lik_list.rds"))
+par_maps <- get_par_map_funcs(prior_list)
+rprior <- get_sampling_func(prior_list)
 ```
+
+# SIPNET model setup
+## Spatial 
+* Site: Bartlett Experimental Forest
+* Site ID: 3380 (using the ID system in Dongchen's SDA run)
+* Site description: a temperate deciduous forest located outside of 
+Bartlett, NH in the white mountains.
+
+## Temporal
+* Time horizon: 01/01/2012 - 12/21/2021
+* Model time step: 3 hours
+* Not yet included the new observations 2021-2024
+
+# Calibration Parameters
+```{r}
+print("Initial conditions:")
+print(pecan_ic_names)
+
+print("Parameters:")
+print(pecan_par_names)
+```
+## Priors
+```{r}
+for(prior in prior_list) {
+  print(paste0("Name: ", prior$param_name))
+  scalar_names <- get_scalar_param_names(prior)
+  print(paste0("Scalar names: ", paste(scalar_names, collapse=", ")))
+  print(paste0("Dist: ", prior$dist_name))
+  print(prior$dist_params)
+}
+```
+# Likelihood
+
+## General info
+* Gaussian likelihood 
+* Observations on annual scale
+* Independence across output variables and years
+
+## Observations
+```{r}
+obs_op <- lik_list$obs_op
+fwd <- lik_list$fwd
+
+y <- lik_list$y
+Sig <- lik_list$Sig
+y_dt <- get_dt_obs_order_from_vec(names(y))
+y_dt[, y := y]
+y_dt[, sig := sqrt(diag(Sig))]
+y_dt[, coef_var := sig/y]
+print(y_dt)
+
+print(paste0("Observation dimension: ", nrow(y_dt)))
+```
+
+
+# MCMC Setup
+- Metropolis-Hastings with proposal covariance adaptation.
+- Sampling done in 9d unconstrained space.
+- 4 chains, run in parallel, each for 50000 iterations.
+- Each chain took about 46-47 hours to run; ~3.3 seconds per iteration.
+```{r}
+# Read MCMC output. 
+chain_samp_list <- list()
+chain_info_list <- list()
+
+for(i in seq_len(n_chains)) {
+  mcmc_path <- file.path(mcmc_dir, paste0("chain_",i), "mcmc_output.rds")
+  mcmc_output <- readRDS(mcmc_path)
+  names(mcmc_output$samp) <- "phi" # Transformed samples in unconstrained space.
+  mcmc_output$samp$par <- par_maps$inv(mcmc_output$samp$phi) # Map back to original space.
+  chain_samp_list[[i]] <- mcmc_output$samp
+  chain_info_list[[i]] <- mcmc_output$info
+}
+
+samp_dt <- format_mcmc_output_multi_chain(chain_samp_list, "mcmc_mh")
+info_dt <- format_mcmc_output_multi_chain(chain_info_list, "mcmc_mh")
+```
+
+```{r}
+# Attach prior samples for comparison.
+n_prior_samp <- 100000L
+prior_samp <- rprior(n_prior_samp)
+
+samp_dt <- append_samples_mat(samp_dt, prior_samp, param_type="par", test_label="prior")
+```
+
 
 ```{r}
 # Trace plots: unconstrained space.
-trace_plots <- get_trace_plots(samp_dt, param_types="phi", itr_start=burn_in_start)
+trace_plots <- get_trace_plots(samp_dt, test_label="mcmc_mh", param_types="phi") # , itr_start=burn_in_start)
 for(plt in trace_plots) plot(plt)
+```
+
+```{r}
+# Trace plots: log-likelihood and log-prior trajectories.
+trace_plots_dens <- get_trace_plots(info_dt, param_names=c("llik", "lprior"),
+                                    itr_start=burn_in_start)
+for(plt in trace_plots_dens) plot(plt)
 ```
 
 ```{r}
@@ -70,11 +176,151 @@ trace_plots <- get_trace_plots(samp_dt, param_types="par", itr_start=burn_in_sta
 for(plt in trace_plots) plot(plt)
 ```
 
+
+## 1d marginals: Initial Conditions
 ```{r}
-# Trace plots: log-likelihood and log-prior trajectories.
-trace_plots_dens <- get_trace_plots(info_dt, param_names=c("llik", "lprior"))
-for(plt in trace_plots_dens) plot(plt)
+# 1d Marginals: ICs
+hist_plots_ic <- get_hist_plot_comparisons(samp_dt, test_label_baseline="prior",
+                                           param_types="par", 
+                                           param_names=pecan_ic_names, 
+                                           itr_start=burn_in_start)
+
+for(plt in hist_plots_ic) plot(plt)
 ```
+
+
+## 1d marginals: SIPNET parameters
+```{r}
+# 1d Marginals: ICs
+hist_plots_par <- get_hist_plot_comparisons(samp_dt, test_label_baseline="prior",
+                                            param_types="par", 
+                                            param_names=pecan_par_names, 
+                                            itr_start=burn_in_start)
+
+for(plt in hist_plots_par) plot(plt)
+```
+
+# TODOs:
+- Summarize prior model ensemble against observational data (take prior model 
+ensemble from EKI).
+- Summarize posterior model ensemble against observational data. Can do this 
+by sub-sampling the MCMC output and then grabbing the run IDs to load the
+model outputs.
+
+
+# Ensemble Kalman Inversion (EKI)
+
+## Run Information
+- Ensemble size: 200
+- Iterations: 3
+- Runtime: ~51 minutes
+
+```{r}
+eki_output <- readRDS(file.path(eki_dir, "eki_output.rds"))
+samp_dt <- append_samples_mat(samp_dt, eki_output$U, param_type="par",
+                              test_label="eki")
+```
+
+## 1d marginals: Initial Conditions
+```{r}
+# 1d Marginals: ICs
+hist_plots_ic <- get_hist_plot_comparisons(samp_dt, test_label_baseline="prior",
+                                           test_labels="eki",
+                                           param_types="par", 
+                                           param_names=pecan_ic_names)
+
+for(plt in hist_plots_ic) plot(plt)
+```
+## 1d marginals: SIPNET parameters
+```{r}
+# 1d Marginals: ICs
+hist_plots_par <- get_hist_plot_comparisons(samp_dt, test_label_baseline="prior",
+                                            test_labels="eki",
+                                            param_types="par", 
+                                            param_names=pecan_par_names)
+
+for(plt in hist_plots_par) plot(plt)
+```
+## 1d KDEs
+```{r}
+kde_plots <- get_1d_kde_plots(samp_dt, test_label_baseline="prior", 
+                              param_types="par", itr_start=burn_in_start)
+
+for(plt in kde_plots) plot(plt)
+```
+
+# Compare prior and posterior ensembles
+
+```{r, include=FALSE}
+n_ens <- 200L
+constraint_vars <- c("LAI", "AbvGrndWood", "TotSoilCarb")
+obs_order <- names(y)
+prior_ens_path <- file.path(base_dir, "eki", "itr_1")
+settings_temp <- PEcAn.settings::read.settings(inputfile=file.path(prior_ens_path, "pecan.CHECKED.xml"))
+
+# Read prior ensemble. 
+run_ids_prior_ens <- paste0("ens_", 1:n_ens)
+G_prior <- obs_op(run_ids_prior_ens, settings_temp)
+```
+
+```{r, include=FALSE}
+# Read posterior ensemble.
+settings_temp <- PEcAn.settings::read.settings(inputfile=file.path(mcmc_dir, "chain_1", "pecan.CHECKED.xml"))
+
+n_subsample_mcmc <- 500L
+run_ids_mcmc <- list.files(settings_temp$modeloutdir)
+itrs <- strsplit(run_ids_mcmc, "_", fixed=TRUE)
+itrs <- sapply(itrs, function(x) x[2])
+itrs <- as.integer(itrs)
+run_ids_mcmc <- run_ids_mcmc[itrs >= 25000]
+run_ids_post_ens <- sample(run_ids_mcmc, size=n_subsample_mcmc, replace=FALSE)
+
+G_post <- obs_op(run_ids_post_ens, settings_temp)
+```
+
+```{r}
+dt_obs <- get_dt_obs_order_from_vec(names(y))
+dt_obs[, y := y]
+
+G_prior_dt <- as.data.table(G_prior)
+G_prior_dt[, type := "model"]
+G_prior_dt <- data.table::melt.data.table(G_prior_dt)
+G_prior_dt[, c("output_var", "year") := tstrsplit(variable, "_", fixed=TRUE)]
+G_prior_dt <- G_prior_dt[, .(type, output_var, year, value)]
+
+G_post_dt <- as.data.table(G_post)
+G_post_dt[, type := "model"]
+G_post_dt <- data.table::melt.data.table(G_post_dt)
+G_post_dt[, c("output_var", "year") := tstrsplit(variable, "_", fixed=TRUE)]
+G_post_dt <- G_post_dt[, .(type, output_var, year, value)]
+```
+
+# Prior ensemble
+```{r}
+
+# Plots histograms of model outputs of single output var separated by year, 
+# with observations overlaid as points.
+boxplot_summary <- function(output_var, dt) {
+  temp_var <- sym(output_var)
+  annual_boxplots <- ggplot(dt[output_var==temp_var]) + 
+                     geom_boxplot(aes(x=year, y=value)) + 
+                     geom_point(aes(x=year, y=y), dt_obs[output_var==temp_var], 
+                                color="red") + 
+                     labs(y=output_var, title="Model pred vs. obs")
+  
+  plot(annual_boxplots)
+}
+
+for(constraint_var in constraint_vars) boxplot_summary(constraint_var, G_prior_dt)
+```
+
+
+# Posterior ensemble
+```{r}
+for(constraint_var in constraint_vars) boxplot_summary(constraint_var, G_post_dt)
+```
+
+
 
 
 
