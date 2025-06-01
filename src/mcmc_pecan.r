@@ -6,7 +6,7 @@
 # Andrew Roberts
 #
 
-run_mcmc <- function(llik, prior_list, n_itr, n_chains=4L, prop_settings) {
+run_mcmc_pecan <- function(llik, prior_list, n_itr, n_chains=4L, prop_settings) {
   # A wrapper around `mcmc_mh()` that handles the running of multiple chains,
   # and parameter transformations for constrained parameters.
   

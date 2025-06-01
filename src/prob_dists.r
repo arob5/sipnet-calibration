@@ -7,7 +7,7 @@
 #  general_helper_functions.r
 
 library(LaplacesDemon)
-
+library(greybox)
 
 # ------------------------------------------------------------------------------
 # General helper functions.
@@ -90,6 +90,10 @@ get_dist_log_density <- function(dist_info) {
     func <- "dnorm"
   } else if(dist_name=="Dirichlet") {
     func <- get_dirichlet_ldens_func(dist_params)
+  } else if(dist_name=="Lognormal") {
+    func <- "dlnorm"
+  } else if(dist_name=="Logitnormal") {
+    func <- get_logitnormal_ldens_func(dist_params)
   } else {
     stop("Distribution ", dist_name, " not currently supported.")
   }
@@ -121,7 +125,7 @@ get_dirichlet_ldens_func <- function(dist_params) {
     stop("`alpha` parameter required for Dirichlet distribution.")
   }
   
-  ldens <- function(x, alpha, log=FALSE) {
+  ldens <- function(x, alpha, ...) {
     if(is.null(dim(x))) x <- matrix(x, nrow=1L)
     vals <- vector(mode="numeric", length=nrow(x))
     tol <- sqrt(.Machine$double.eps)
@@ -135,6 +139,37 @@ get_dirichlet_ldens_func <- function(dist_params) {
     }
     
     vals[is.na(vals) | is.infinite(vals)] <- -Inf
+    return(vals)
+  }
+  
+  return(ldens)
+}
+
+
+get_logitnormal_ldens_func <- function(dist_params) {
+  # A light wrapper around greybox::dlogitnorm that modified greybox's function
+  # to return -Inf (instead of NA) when the input is outside of the [0,1]
+  # bounds.
+  
+  mu <- dist_params$mu
+  if(is.null(mu)) {
+    stop("`mu` parameter required for logitnormal distribution.")
+  }
+  
+  sigma <- dist_params$sigma
+  if(is.null(sigma)) {
+    stop("`sigma` parameter required for logitnormal distribution.")
+  }
+  
+  # Construct log-density function.
+  ldens <- function(x, mu, sigma, ...) {
+    
+    # Values outside of bounds get -Inf.
+    x <- drop(x)
+    vals <- rep(-Inf, length(x))
+    within_bounds <- (x > 0) & (x < 1)
+    vals[within_bounds] <- greybox::dlogitnorm(x[within_bounds], mu=mu, 
+                                               sigma=sigma, log=TRUE)
     return(vals)
   }
   
@@ -180,6 +215,10 @@ get_dist_sampling_func <- function(dist_info) {
     func_name <- "rnorm"
   } else if(dist_name=="Dirichlet") {
     func_name <- "rdirichlet"
+  } else if(dist_name=="Lognormal") {
+    func_name <- "rlnorm"
+  } else if(dist_name=="Logitnormal") {
+    func_name <- "rlogitnorm"
   } else {
     stop("Distribution ", dist_name, " not currently supported.")
   }
@@ -211,6 +250,8 @@ convert_par_info_to_list <- function(par_info) {
     else if(dist_name == "Uniform") dist_params <- list(min=param1, max=param2)
     else if(dist_name == "Gamma") dist_params <- list(shape=param1, rate=param2)
     else if(dist_name == "Beta") dist_params <- list(shape1=param1, shape2=param2)
+    else if(dist_name == "Lognormal") dist_params <- list(meanlog=param1, sdlog=param2)
+    else if(dist_name == "Logitnormal") dist_params <- list(mu=param1, sigma=param2)
     else {
       stop("Distribution `", dist_name, "` not supported by `convert_par_info_to_list()`.")
     }
